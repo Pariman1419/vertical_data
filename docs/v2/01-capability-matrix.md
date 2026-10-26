@@ -64,3 +64,28 @@ Target: `10.153.90.17` (SPICE host, LAN). Commands limited to health, `SELECT 1`
 | Cancellation, limits, snapshot semantics | UNKNOWN | |
 
 Implication for Gate 3: REST returns a full array per call, so bounded extraction over REST must be done with SQL-level paging (`ORDER BY` + keyset/`LIMIT`), or Flight SQL streaming, which is still to be tested. Plain REST bulk fetch stays blocked.
+
+## Live probe #2 2026-10-26 — dev machine + SPICE `10.153.90.17` — TESTED LIVE (read-only; only `*_mock` tables read, LIMIT ≤ 20000)
+
+| Item | Result |
+|---|---|
+| Dev host | Docker Desktop 28.4.0 / Compose 2.39.4, 12 CPU, ~16 GB RAM, Python 3.12.7, Node 24.22.1 |
+| Dev port conflict | **Host port 5432 already LISTENING** → compose Postgres must publish a different host port (e.g. 15432) or none. 6379/8000/5173 free |
+| System python `pyarrow` | BROKEN (numpy ImportError) → use project venv |
+| Container → SPICE REST | VERIFIED: `docker run curl` → `GET :8091/health` 200 |
+| `/v1/status` | http, flight (`:50051`), opentelemetry Ready; metrics Disabled |
+| Catalog | VERIFIED via `information_schema.tables` / `columns` (catalog `spice`, schema `public`; ~35+ tables/views incl. `*_mock`) |
+| `/v1/datasets` | VERIFIED: lists name + upstream `from` (postgres / oracle / odbc). **Reveals upstream schema names → treat as sensitive; do not expose raw to browser** |
+| REST binds | VERIFIED: `$1` positional, `SELECT $1+1` with `[41]` → 42; string bind in `information_schema` filter works |
+| REST errors | 400 with parser message (text/plain) — sanitize before showing users |
+| Flight (raw, `FlightDescriptor.for_command(sql)` via pyarrow) | VERIFIED: schema returned; **streams in record batches** (20,000 rows → 5 batches, 0.93 s); `total_records` = 0 (unknown up-front) |
+| Flight actions listed | CreatePreparedStatement, SubmitAsyncQuery, GetAsyncQueryStatus/Result, **CancelAsyncQuery, CancelQuery** → cancellation exists on paper; **not yet exercised** |
+| Auth | No credential required on REST or Flight from this LAN host (UNAUTHENTICATED service) → U-ETL must enforce allowlists; network-restrict SPICE |
+| Write rejection (DDL/DML) | **UNTESTED** — deliberately not attempted on a shared server. Needs owner OK / a disposable instance; until then rely on U-ETL AST validation + treat SPICE as possibly writable |
+| Type fidelity | **RISK CONFIRMED**: Oracle NUMBER columns surface as `Float64` (e.g. OPERATION_SEQ, OPERATE_NO, SEQ_NO) and `Int64`; exact decimals/large keys cannot be assumed → Gate 3 precision test must compare against source, and big IDs should be read as string/Decimal via SQL `CAST` where possible |
+
+### Consequences for the plan
+1. **Gate 3 is NOT blocked**: Flight streaming exists, so the worker uses Flight (REST only for catalog/preview).
+2. Cancellation test and write-rejection test are pending owner permission.
+3. Compose Postgres host port must not be 5432.
+4. Precision: add a fixture comparing SPICE Float64 vs source for NUMBER columns before Gate 3.

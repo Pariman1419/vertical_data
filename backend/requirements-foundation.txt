@@ -1,0 +1,3 @@
+# Synthetic foundation harness: Python >=3.12, standard library only.
+# No pip packages required; no FastAPI/ODBC/SQL Server connector installed.
+# Current tested interpreter: Python 3.12.14. Runtime SQLite version recorded in validation.

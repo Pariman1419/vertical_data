@@ -1,0 +1,8 @@
+{
+  "name": "utl-etl",
+  "private": true,
+  "version": "0.1.0-demo",
+  "description": "U-ETL Factory Data Bridge UI Prototype",
+  "scripts": { "start": "node serve.js", "build": "node scripts/build.cjs", "test": "node scripts/test.cjs" },
+  "engines": { "node": ">=20" }
+}

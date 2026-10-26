@@ -1,0 +1,16 @@
+node_modules/
+.spike-venv/
+*.pem
+__pycache__/
+*.pyc
+.foundation-test/
+*.sqlite3
+*.sqlite3-*
+dist/
+.env
+.env.*
+!.env.example
+docs/.presentation-build/
+docs/.presentation-output*/
+.ua/
+.test-temp/

@@ -89,3 +89,15 @@ Implication for Gate 3: REST returns a full array per call, so bounded extractio
 2. Cancellation test and write-rejection test are pending owner permission.
 3. Compose Postgres host port must not be 5432.
 4. Precision: add a fixture comparing SPICE Float64 vs source for NUMBER columns before Gate 3.
+
+## Live probe #3 2026-10-26 — owner-authorised write-rejection and cancellation tests — TESTED LIVE
+
+| Item | Result |
+|---|---|
+| DDL (`CREATE TABLE`, `CREATE VIEW`) via REST | **REJECTED** (400): "DDL … only supported on catalogs configured with `access: read_write_create`". Nothing was created (verified via `information_schema`) |
+| DML (`INSERT` into `lot_dm_mock`) | **REJECTED** (400): dataset is read-only (`access: read_write` needed) |
+| Meaning | Read-only is enforced **by SPICE config** for the datasets tested. Still treat as defence-in-depth; U-ETL AST validation remains mandatory because a different catalog/dataset may be configured writable |
+| Flight client-side cancel (`reader.cancel()` after 1st batch, 4,000 rows in 0.25 s) | VERIFIED: further reads raise `FlightCancelledError` |
+| `CancelQuery` action | exists; expects a **JSON body** (bogus bytes → "Invalid CancelQuery request body"). Server-side cancel semantics (does the upstream query stop?) NOT yet verified; payload schema to be discovered |
+| `SubmitAsyncQuery` / `CancelAsyncQuery` | **UNSUPPORTED**: "Async queries are only available in cluster mode" |
+| Scale hint | `COUNT(*)` of `lot_dm_mock` = 372,248 rows in 0.30 s (good Gate 3 volume fixture) |

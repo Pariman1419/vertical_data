@@ -45,3 +45,22 @@ Date: 2026-10-26. **No live service was contacted in Phase 0** (no permission ye
 | Redis TLS/ACL/persistence | UNKNOWN | New instance proposed: AOF `everysec`, ACL user per service, TLS optional on internal network (decision D3). |
 | Redis queue semantics | N/A until spike | See D6. |
 | vLLM/LiteLLM | UNKNOWN / out of scope | Settings placeholder only; no call in Phase 0–4. |
+
+## Live probe 2026-10-26 (read-only, owner-authorised, from dev machine) — TESTED LIVE
+
+Target: `10.153.90.17` (SPICE host, LAN). Commands limited to health, `SELECT 1`, one TCP connect and two GETs.
+
+| Capability | Result | Evidence |
+|---|---|---|
+| HTTP health `:8091/health` | VERIFIED | `200 ok` |
+| HTTP SQL `POST /v1/sql` | VERIFIED | body requires `sql` **and** `parameters` (array); `{"sql":"SELECT 1 AS one","parameters":[]}` → `200 [{"one":1}]` |
+| Typed bind parameters | PARTIAL — field exists; binding semantics/types not tested | 400 `missing field parameters` without it |
+| Response shape | VERIFIED: whole result is one JSON array, **not streamed/paginated** | single `content-length` body |
+| Authentication | UNKNOWN: no credentials were sent and none were required for these calls | no 401 |
+| Result cache | NOTE: header `results-cache-scope: shared` — cache is shared across callers; cache-isolation/staleness to be assessed |
+| `/v1/openapi.json` | UNSUPPORTED at that path (404) | |
+| `/v1/datasets` | route exists (200); contents not read | |
+| Flight SQL `:50051` | PORT OPEN only. Protocol/auth/streaming NOT verified | TCP connect succeeded |
+| Cancellation, limits, snapshot semantics | UNKNOWN | |
+
+Implication for Gate 3: REST returns a full array per call, so bounded extraction over REST must be done with SQL-level paging (`ORDER BY` + keyset/`LIMIT`), or Flight SQL streaming, which is still to be tested. Plain REST bulk fetch stays blocked.

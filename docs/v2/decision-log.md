@@ -25,3 +25,9 @@ Gate 0 approved by owner on 2026-10-27 ("approve ตาม proposal"). Entries b
 | 2026-10-27 | D8 resolved | Dialect = Apache DataFusion (SPICE SQL). | AST validator must target it. |
 | 2026-10-27 | Transport (proposed) | Worker + bounded preview use **Flight**; REST only for health/catalog. Numerics never via JSON numbers. | Streaming and early stop proven live; REST has no cap. Pending owner OK. |
 | 2026-10-27 | New dependency (proposed) | `pyarrow` (already on the dev machine, v25.0.1) for the Flight client; pin in `requirements-v2.txt` when the client is written. | Large wheel; Docker image grows. |
+
+## 2026-10-27 — Owner risk acceptances for the TEST phase (SPICE host 10.153.90.17)
+- **Firewall stays open (Any) on 8091/50051 during testing.** Accepted by owner. Revisit before any non-test use: restrict to U-ETL + known clients (e.g. 10.153.93.177) and add auth in front of SPICE.
+- **Source DB users are not independently verified read-only** (verified only for Postgres `spice_vdl_ro`; Oracle/SQL Server unknown). Owner: access is controlled through SPICE; no DBA confirmation requested now. U-ETL itself sends only SELECT/DESCRIBE and cannot reach the DBs directly. Residual risk: anyone able to reach SPICE can send any SQL the DB user permits (SPICE write/DDL rejection is untested).
+- **Windows admin password on the SPICE host not rotated** (it appeared in chat). Accepted by owner for now.
+- Dataset onboarding design: U-ETL generates a spicepod entry that references existing source profiles (`*pg`, `*scada`); no DB credentials pass through U-ETL; a human applies it on the host (backup -> edit -> validate -> reload/restart -> Refresh catalog). Automatic writer on the SPICE host deferred until SPICE has authentication.

@@ -113,10 +113,12 @@ def health(conn):
 def list_datasets(conn):
     try:
         rows = json.loads(_rest(conn, "GET", "/v1/datasets"))
-        names = [d["name"] for d in rows]
+        datasets = [{"name": d["name"], "kind": d.get("from", "").split(":", 1)[0]} for d in rows]
     except (ValueError, KeyError, TypeError) as e:
         raise SpiceError("protocol", e) from None
-    return sorted(n for n in names if isinstance(n, str) and OBJECT_RE.match(n))
+    return sorted(({"name": d["name"], "kind": d["kind"] if d["kind"] in ("postgres", "odbc") else "other"}
+                   for d in datasets if isinstance(d["name"], str) and OBJECT_RE.fullmatch(d["name"])),
+                  key=lambda d: d["name"])
 
 
 def quote(obj):

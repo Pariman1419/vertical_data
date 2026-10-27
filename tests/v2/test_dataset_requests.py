@@ -105,7 +105,8 @@ def test_refresh_closes_matching_pending_requests(env, conn, monkeypatch):
     c, url, cid = conn
     c.post(url, json=body(dataset_name="will_appear"))
     c.post(url, json=body(dataset_name="stays_pending"))
-    monkeypatch.setattr(spice, "list_datasets", lambda conn: ["will_appear", "alarm"])
+    monkeypatch.setattr(spice, "list_datasets", lambda conn: [
+        {"name": "will_appear", "kind": "postgres"}, {"name": "alarm", "kind": "odbc"}])
     monkeypatch.setattr(spice, "describe", lambda conn, n: [{"name": "a", "type": "Utf8", "nullable": True}])
     r = c.post(url.replace("dataset-requests", "catalog/refresh"))
     assert r.status_code == 200 and r.json()["requests_applied"] == 1

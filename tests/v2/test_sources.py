@@ -6,7 +6,7 @@ import time
 import pytest
 
 from test_api import env  # noqa: F401
-from backend.v2 import spice
+from backend.v2 import limiter, spice
 
 LIVE = {"base_url": "http://10.153.90.17:8091", "timeout_s": 10, "tls_verify": True, "secret_ref": None}
 
@@ -165,3 +165,33 @@ def test_secret_resolution_refuses_non_spice_settings(monkeypatch):
     monkeypatch.setenv("SPICE_TEST_TOKEN", "ok-token")
     assert spice._token({"secret_ref": "UETL_APP_PASSWORD"}) is None
     assert spice._token({"secret_ref": "SPICE_TEST_TOKEN"}) == "ok-token"
+
+
+def test_list_datasets_returns_kind_without_source_path(monkeypatch):
+    monkeypatch.setattr(spice, "_rest", lambda *a: json.dumps([
+        {"name": "pg_table", "from": 'postgres:"secret_schema"."secret_table"'},
+        {"name": "alarm", "from": "odbc:private.db.path"},
+        {"name": "file_table", "from": "file:/private/path"},
+        {"name": "bad;name", "from": "odbc:private"},
+    ]).encode())
+    assert spice.list_datasets(LIVE) == [
+        {"name": "alarm", "kind": "odbc"}, {"name": "file_table", "kind": "other"},
+        {"name": "pg_table", "kind": "postgres"}]
+
+
+def test_refresh_stores_kind_and_hides_from_string(env, conn, monkeypatch):
+    c, url = conn
+    monkeypatch.setattr(spice, "list_datasets", lambda _: [{"name": "alarm", "kind": "odbc"}])
+    monkeypatch.setattr(spice, "describe", lambda *_: [{"name": "id", "type": "Int64", "nullable": False}])
+    assert c.post(url + "/catalog/refresh").status_code == 200
+    c.put(url + "/allowed-objects", json={"objects": ["alarm"]})
+    obj = c.get(url + "/catalog").json()["objects"]["alarm"]
+    assert obj["kind"] == "odbc" and obj["limit_pushdown"] is None
+    cid = url.split("/")[-1]
+    env.cur.execute("update catalog_snapshot set payload=jsonb_set(payload,'{objects,alarm,limit_pushdown}','false')"
+                    " where connection_id=%s", (cid,))
+    assert c.post(url + "/catalog/refresh").status_code == 200
+    assert c.get(url + "/catalog").json()["objects"]["alarm"]["limit_pushdown"] is False
+    for path in ("/catalog", "/catalog/all"):
+        assert '"from"' not in c.get(url + path).text
+

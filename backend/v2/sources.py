@@ -90,10 +90,18 @@ def build(workspace_access, DB, audit):
         with db.cursor() as cur:
             c = conn(cur, ws, connection_id)
         try:
-            objects = {n: {"columns": spice.describe(c, n)} for n in spice.list_datasets(c)}
+            objects = {d["name"]: {"columns": spice.describe(c, d["name"]), "kind": d["kind"]}
+                       for d in spice.list_datasets(c)}
         except spice.SpiceError as e:
             fail(e)
         with db.cursor() as cur:
+            # Serialize revisions and policy updates, after (not during) remote metadata reads.
+            cur.execute("select id from connection where id=%s for update", (connection_id,))
+            previous = latest(cur, connection_id)
+            prior_objects = previous["payload"]["objects"] if previous else {}
+            for name, obj in objects.items():
+                old = prior_objects.get(name, {})
+                obj["limit_pushdown"] = old.get("limit_pushdown") if old.get("kind") == obj["kind"] else None
             cur.execute("select coalesce(max(revision),0)+1 as n from catalog_snapshot where connection_id=%s", (connection_id,))
             rev = cur.fetchone()["n"]
             cur.execute("insert into catalog_snapshot(connection_id,revision,payload) values (%s,%s,%s)",

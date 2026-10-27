@@ -40,3 +40,8 @@
 - `backend/v2/connections.py`: secret refs (names only, env-var style), connection CRUD, object allowlist; workspace-scoped, audited, no secret values in any response. Changing `base_url` resets status/capabilities.
 - Tests: `tests/v2/test_connections.py` (9) -> total **34 passed** [TESTED LIVE (DB); no SPICE contacted].
 - NOT done / BLOCKED (D2): no SPICE host/port/credentials known (`D:\CIM Project\spice` no longer exists on this machine); no read-only probe has been run; therefore no SPICE client, catalog refresh, test-connection, capabilities or preview endpoints yet. They must not be coded against an unprobed wire format.
+
+## 2026-10-27 — SPICE probe (D2) [TESTED LIVE, read-only]
+- Target 10.153.90.17 :8091/:50051 (owner-supplied). Full list of statements, results and the NOT-tested list in `09-spice-probe-results.md`.
+- Headline: no auth; REST has no streaming/row cap (2 M rows = 34.9 MB); Flight streams in 8,192-row batches and can be stopped early (0.03 s); decimal128 exact on Flight, exact text on REST; binds work on REST only; dialect DataFusion; errors leak internal names.
+- Not tested: writes/DDL rejection, server-side cancel, TLS, behaviour on large real tables.

@@ -20,3 +20,8 @@ Gate 0 approved by owner on 2026-10-27 ("approve ตาม proposal"). Entries b
 - **Superuser password was pasted in chat** — recommend rotating after Phase 1.
 - Redis in WSL does not auto-start after reboot.
 - `pg_dump` / client tools not present locally: Gate 1 backup/restore may be `BLOCKED` unless installed.
+
+| 2026-10-27 | D2/D13 resolved (partly) | Owner supplied SPICE `10.153.90.17` (HTTP 8091, Flight 50051) and asked for a probe. Results in `09-spice-probe-results.md`. SPICE has **no authentication**; U-ETL allowlist is the compensating control for U-ETL users only. | Gate 2 unblocked for read paths. |
+| 2026-10-27 | D8 resolved | Dialect = Apache DataFusion (SPICE SQL). | AST validator must target it. |
+| 2026-10-27 | Transport (proposed) | Worker + bounded preview use **Flight**; REST only for health/catalog. Numerics never via JSON numbers. | Streaming and early stop proven live; REST has no cap. Pending owner OK. |
+| 2026-10-27 | New dependency (proposed) | `pyarrow` (already on the dev machine, v25.0.1) for the Flight client; pin in `requirements-v2.txt` when the client is written. | Large wheel; Docker image grows. |

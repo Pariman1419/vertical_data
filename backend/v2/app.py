@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import config, rbac, security
+from . import config, connections, rbac, security
 from .db import get_db, ping
 
 log = logging.getLogger("uetl")
@@ -384,6 +384,10 @@ def audit_events(limit: int = 100, ctx=Depends(workspace_access("settings.manage
                     " from audit_event a left join app_user u on u.id=a.actor_user_id"
                     " where a.workspace_id=%s order by a.id desc limit %s", (ctx["workspace_id"], max(1, min(limit, 200))))
         return cur.fetchall()
+
+
+# ---------- Phase 2: secret refs + source connections ----------
+app.include_router(connections.build(workspace_access, DB, audit))
 
 
 # ---------- static UI (existing pilot UI, unchanged files + v2-ui.js) ----------

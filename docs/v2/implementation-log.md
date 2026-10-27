@@ -32,3 +32,11 @@
 - `docker compose build/up`: api healthy; `/healthz` 200; `/readyz` 200; Redis stopped -> 503 (healthz 200) -> restarted -> 200. Hardening verified via `docker inspect`/exec. [TESTED LIVE]
 - Fixes found by running it: compose now overrides `UETL_REDIS_URL` (the `.env` value pointed at host 127.0.0.1); added `.dockerignore`.
 - Not done: restore round-trip (needs a throwaway schema; awaiting approval).
+
+## 2026-10-27 — Phase 2 part 1 (owner: "use SPICE together with Postgres as planned; complete the plan")
+- Owner decision recorded: continue past Gate 1 with its open items (backup/restore round-trip, API-level forged approval) carried forward.
+- Migration 0003 applied: `connection_allowed_object` (per-connection object allowlist, D13) + DB trigger forbidding a connection from using another workspace's `secret_ref`. [TESTED LIVE]
+- `backend/v2/netpolicy.py`: connection URLs must be on `UETL_SPICE_ALLOWED_HOSTS` (host:port) and may not resolve to loopback/link-local/metadata/multicast/unspecified even if allow-listed; empty allowlist = deny all; `resolve_pinned()` returns the IP to connect to (rebinding defence). Bug found by its own test: default resolver was bound at import and could not be substituted; now late-bound.
+- `backend/v2/connections.py`: secret refs (names only, env-var style), connection CRUD, object allowlist; workspace-scoped, audited, no secret values in any response. Changing `base_url` resets status/capabilities.
+- Tests: `tests/v2/test_connections.py` (9) -> total **34 passed** [TESTED LIVE (DB); no SPICE contacted].
+- NOT done / BLOCKED (D2): no SPICE host/port/credentials known (`D:\CIM Project\spice` no longer exists on this machine); no read-only probe has been run; therefore no SPICE client, catalog refresh, test-connection, capabilities or preview endpoints yet. They must not be coded against an unprobed wire format.

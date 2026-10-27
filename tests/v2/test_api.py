@@ -4,6 +4,7 @@ All DB work runs on ONE connection that is rolled back at the end: nothing is pe
 """
 import logging
 import pathlib
+import re
 import sys
 import uuid
 
@@ -85,10 +86,7 @@ def routes():
 
 
 def fill(path):
-    out = path
-    for name in ("workspace_id", "user_id"):
-        out = out.replace("{" + name + "}", str(uuid.uuid4()))
-    return out
+    return re.sub(r"\{[a-z_]+\}", lambda _m: str(uuid.uuid4()), path)
 
 
 PUBLIC = {"/api/v2/auth/login", "/healthz", "/readyz"}
@@ -115,7 +113,7 @@ def test_cross_workspace_access_is_404_on_every_workspace_route(env):
         r = c.request(method, fill(path.replace("{workspace_id}", str(env.ws2))), json={"username": "x", "role": "viewer"})
         assert r.status_code == 404, (method, path, r.status_code)
         n += 1
-    assert n >= 4
+    assert n >= 12
 
 
 def test_workspace_routes_allow_own_workspace_admin(env):

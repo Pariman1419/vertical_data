@@ -25,6 +25,8 @@ def test_connection_crud_never_returns_secret_values(env, spice_allowed):
     base = f"/api/v2/workspaces/{env.ws1}"
     assert c.post(f"{base}/secret-refs", json={"name": "SPICE_TOKEN"}).status_code == 201
     assert c.post(f"{base}/secret-refs", json={"name": "lower-case"}).status_code == 422
+    for bad in ("UETL_APP_PASSWORD", "UETL_MIGRATOR_PASSWORD", "PATH", "UETL_REDIS_PASSWORD"):   # must not be referencable
+        assert c.post(f"{base}/secret-refs", json={"name": bad}).status_code == 422, bad
     r = c.post(f"{base}/connections", json=conn_body(secret_ref="SPICE_TOKEN"))
     assert r.status_code == 201, r.text
     body = r.json()

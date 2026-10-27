@@ -65,7 +65,8 @@ class _PinnedTLS(http.client.HTTPSConnection):
 
 def _token(conn):
     name = conn.get("secret_ref")
-    return config.get(name) if name else None
+    # defence in depth: a secret_ref may only name a SPICE_* setting, never UETL_* (database / Redis passwords)
+    return config.get(name) if name and name.startswith("SPICE_") else None
 
 
 def _rest(conn, method, path, body=None, max_bytes=2_000_000):

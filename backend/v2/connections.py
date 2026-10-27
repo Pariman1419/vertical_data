@@ -17,13 +17,14 @@ from pydantic import BaseModel, Field
 from . import netpolicy
 
 NAME_RE = r"^[A-Z][A-Z0-9_]{2,60}$"
+SECRET_PREFIX = "SPICE_"  # only SPICE_* settings can be referenced; UETL_* (DB/Redis passwords) never can
 OBJECT_RE = re.compile(r"^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+){0,2}$")
 CONN_COLS = ("c.id, c.name, c.kind, c.base_url, c.tls_verify, c.auth_mode, s.name as secret_ref, c.scope, c.timeout_s,"
              " c.capabilities, c.last_test_at, c.status")
 
 
 class SecretRefIn(BaseModel):
-    name: str = Field(pattern=NAME_RE)  # env-var style name; the value is resolved server-side only
+    name: str = Field(pattern=r"^SPICE_[A-Z0-9_]{1,55}$")  # env-var style name; the value is resolved server-side only
 
 
 class ConnectionIn(BaseModel):

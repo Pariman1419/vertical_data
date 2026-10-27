@@ -68,3 +68,6 @@
 - UI: request form + list + copyable entry on the Sources page (syntax-checked only).
 - Tests: `tests/v2/test_dataset_requests.py` -> full suite **71 passed**. YAML/SQL injection cases (quotes, newlines, `;`, `: `, extra dots) all rejected.
 - Not done: Oracle profiles (need sample from host), reload/restart result (needs the SPICE host test), automatic writer on the host (deferred, SPICE has no auth).
+
+## 2026-10-27 — Gate 2 self-review finding [fixed, TESTED]
+- A `secret_ref` accepted any env-style name, and the SPICE client resolved it through `config.get`, so a workspace admin could register `UETL_APP_PASSWORD` (or any process env var) as a "token" and have it sent as a Bearer header to the allow-listed SPICE host. Fix: secret names must match `^SPICE_[A-Z0-9_]{1,55}$` at creation and the client refuses to resolve anything else. Tests added (72 passed).

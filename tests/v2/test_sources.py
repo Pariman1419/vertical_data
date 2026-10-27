@@ -158,3 +158,10 @@ def test_preview_works_for_sources_that_reject_limit_pushdown(env, conn):
     r = c.post(url + "/preview", json={"object": "alarm", "limit": 3})
     assert r.status_code == 200, r.text
     assert len(r.json()["rows"]) == 3 and r.json()["truncated"] is True
+
+
+def test_secret_resolution_refuses_non_spice_settings(monkeypatch):
+    monkeypatch.setenv("UETL_APP_PASSWORD", "canary-value")
+    monkeypatch.setenv("SPICE_TEST_TOKEN", "ok-token")
+    assert spice._token({"secret_ref": "UETL_APP_PASSWORD"}) is None
+    assert spice._token({"secret_ref": "SPICE_TEST_TOKEN"}) == "ok-token"

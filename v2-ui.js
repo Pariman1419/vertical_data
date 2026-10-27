@@ -6,7 +6,7 @@
  */
 (function () {
   'use strict';
-  const V2 = { enabled: false, checked: false, user: null, csrf: '', workspaces: [], ws: null, members: null, audit: null, users: null, conns: null, catall: null, cat: null, sel: null, result: null, error: '', busy: false };
+  const V2 = { enabled: false, checked: false, user: null, csrf: '', workspaces: [], ws: null, members: null, audit: null, users: null, conns: null, catall: null, cat: null, reqs: null, sel: null, result: null, error: '', busy: false };
   const KEY = 'uetl.v2.workspace';
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const ROLES = ['viewer', 'author', 'reviewer', 'operator', 'admin'];
@@ -30,7 +30,7 @@
     return data;
   }
 
-  function reset() { Object.assign(V2, { user: null, csrf: '', workspaces: [], ws: null, members: null, audit: null, users: null, conns: null, catall: null, cat: null, sel: null, result: null }); }
+  function reset() { Object.assign(V2, { user: null, csrf: '', workspaces: [], ws: null, members: null, audit: null, users: null, conns: null, catall: null, cat: null, reqs: null, sel: null, result: null }); }
   const role = () => (V2.workspaces.find(w => w.id === V2.ws) || {}).role || '';
   const isSuper = () => V2.user?.platform_role === 'superadmin';
   const canManage = () => isSuper() || role() === 'admin';
@@ -49,7 +49,7 @@
     V2.user = me.user; V2.csrf = me.csrf; V2.workspaces = me.workspaces;
     let saved = null; try { saved = localStorage.getItem(KEY); } catch { /* storage may be blocked */ }
     V2.ws = V2.workspaces.some(w => w.id === saved) ? saved : (V2.workspaces[0]?.id || null);
-    V2.members = V2.audit = V2.users = V2.conns = V2.catall = V2.cat = V2.sel = V2.result = null; V2.error = '';
+    V2.members = V2.audit = V2.users = V2.conns = V2.catall = V2.cat = V2.reqs = V2.sel = V2.result = null; V2.error = '';
   }
 
   let PAGES_ADDED = false;
@@ -133,7 +133,7 @@
       <p class="muted">Only hosts on the server allowlist are accepted. SPICE data is read over Arrow Flight with row, size and time limits.</p><button class="primary">Add</button></form>` : '';
     return intro('Sources (SPICE)', 'การเชื่อมต่อแหล่งข้อมูล, แค็ตตาล็อก และ preview แบบจำกัดขนาด') + banner() +
       `<div class="card tablewrap"><table class="table"><thead><tr><th>Name</th><th>URL</th><th>Status</th><th>Last test</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="muted">No connections.</td></tr>'}</tbody></table></div>` +
-      add + (V2.sel ? catalogPanel(mgr) + previewPanel() : '');
+      add + (V2.sel ? catalogPanel(mgr) + previewPanel() + requestPanel(mgr) : '');
   }
 
   function catalogPanel(mgr) {
@@ -155,6 +155,27 @@
     const table = r ? `<div class="card tablewrap"><table class="table"><thead><tr>${r.columns.map(c => `<th>${esc(c.name)}<br><small class="muted">${esc(c.type)}</small></th>`).join('')}</tr></thead><tbody>${r.rows.map(row => `<tr>${row.map(v => `<td>${v === null ? '<span class="muted">null</span>' : esc(v)}</td>`).join('')}</tr>`).join('')}</tbody></table>${r.truncated ? '<p class="muted">Truncated at the preview limit.</p>' : ''}</div>` : '';
     return `<div class="title">Preview</div><form class="card" data-v2-form="preview"><label class="field">Object<select name="object">${objs.map(([n]) => `<option>${esc(n)}</option>`).join('')}</select></label>
       <label class="field">Rows (1–1000)<input name="limit" type="number" min="1" max="1000" value="50"></label><button class="primary">Run preview</button></form>` + table;
+  }
+
+  const PROFILES = { pg: 'PostgreSQL (schema.table)', scada: 'SQL Server SCADA (Database.schema.table)' };
+  const reqBadge = s => badge(esc(s), s === 'applied' ? 'ok' : s === 'cancelled' ? 'err' : 'warn');
+
+  function requestPanel(mgr) {
+    load('reqs', connUrl() + '/dataset-requests');
+    const list = V2.reqs || [];
+    const rows = list.map(q => `<tr><td><code>${esc(q.dataset_name)}</code></td><td>${esc(q.profile)}</td><td><code>${esc(q.remote_object)}</code></td><td>${reqBadge(q.status)}</td><td>${esc(new Date(q.created_at).toLocaleString())}</td>
+      <td>${q.status === 'pending' && mgr ? `<button type="button" data-v2="cancel-req" data-id="${esc(q.id)}">Cancel</button>` : ''}</td></tr>
+      ${q.status === 'pending' ? `<tr><td colspan="6"><div class="muted">Paste this into <code>spicepod.yaml</code> on the SPICE host, then restart/reload SPICE and press “Refresh catalog”:</div><pre class="v2-yaml">${esc(q.snippet)}</pre>
+      <button type="button" data-v2="copy" data-text="${esc(q.snippet)}">Copy</button></td></tr>` : ''}`).join('');
+    const form = mgr ? `<form class="card" data-v2-form="request"><label class="field">Source profile<select name="profile">${Object.entries(PROFILES).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select></label>
+      <label class="field">Dataset name in SPICE (a-z, 0-9, _)<input name="dataset_name" required pattern="[a-z][a-z0-9_]{2,60}" maxlength="61"></label>
+      <label class="field">Source table<input name="remote_object" required maxlength="200" placeholder="schema.table"></label>
+      <label class="field">Note (optional)<input name="note" maxlength="500"></label>
+      <p class="muted">No database password is entered here. The new dataset reuses the credentials already configured for the chosen profile on the SPICE host. A SPICE operator must apply the entry; this page does not change SPICE.</p>
+      <button class="primary">Create request</button></form>` : '';
+    return `<div class="title">Request a new dataset</div>${form}
+      <div class="card tablewrap"><table class="table"><thead><tr><th>Name</th><th>Profile</th><th>Source table</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="muted">No requests.</td></tr>'}</tbody></table></div>
+      <p class="muted">Apply steps: 1) back up spicepod.yaml, 2) paste the entry, 3) validate the YAML, 4) reload/restart SPICE (not yet confirmed which one is needed), 5) press “Refresh catalog”: the request closes itself when the name appears.</p>`;
   }
 
   function accountPage() {
@@ -237,6 +258,9 @@
       } else if (kind === 'conn') {
         await api('POST', `/workspaces/${V2.ws}/connections`, { name: f.name, kind: 'rest', base_url: f.base_url });
         invalidate('conns'); S.notice = 'Connection added';
+      } else if (kind === 'request') {
+        await api('POST', connUrl() + '/dataset-requests', { profile: f.profile, dataset_name: f.dataset_name, remote_object: f.remote_object, note: f.note || null });
+        invalidate('reqs'); S.notice = 'Request created';
       } else if (kind === 'allow') {
         await api('PUT', connUrl() + '/allowed-objects', { objects: new FormData(form).getAll('obj') });
         invalidate('cat'); invalidate('catall'); S.notice = 'Allowlist saved';
@@ -266,10 +290,12 @@
       if (act === 'logout') { await api('POST', '/auth/logout', {}); reset(); S.page = 'sources'; V2.error = ''; }
       else if (act === 'pick') { setWs(el.dataset.id); }
       else if (act === 'remove') { await api('DELETE', `/workspaces/${V2.ws}/members/${el.dataset.id}`); invalidate('members'); S.notice = 'Member removed'; }
-      else if (act === 'pick-conn') { V2.sel = el.dataset.id; V2.cat = V2.catall = V2.result = null; }
+      else if (act === 'pick-conn') { V2.sel = el.dataset.id; V2.cat = V2.catall = V2.reqs = V2.result = null; }
+      else if (act === 'cancel-req') { await api('POST', connUrl() + `/dataset-requests/${el.dataset.id}/cancel`); invalidate('reqs'); S.notice = 'Request cancelled'; }
+      else if (act === 'copy') { try { await navigator.clipboard.writeText(el.dataset.text); S.notice = 'Copied'; } catch { S.notice = 'Copy failed: select the text manually'; } }
       else if (act === 'test-conn') { V2.sel = el.dataset.id; const t = await api('POST', connUrl() + '/test'); invalidate('conns'); S.notice = t.status === 'ok' ? 'Connection OK' : 'Test failed: ' + t.error; }
       else if (act === 'del-conn') { await api('DELETE', `/workspaces/${V2.ws}/connections/${el.dataset.id}`); V2.sel = null; V2.cat = V2.catall = V2.result = null; invalidate('conns'); S.notice = 'Connection deleted'; }
-      else if (act === 'refresh-cat') { const r = await api('POST', connUrl() + '/catalog/refresh'); invalidate('cat'); invalidate('catall'); S.notice = `Catalog revision ${r.revision}: ${r.objects} objects`; }
+      else if (act === 'refresh-cat') { const r = await api('POST', connUrl() + '/catalog/refresh'); invalidate('cat'); invalidate('catall'); invalidate('reqs'); S.notice = `Catalog revision ${r.revision}: ${r.objects} objects` + (r.requests_applied ? `; ${r.requests_applied} request(s) fulfilled` : ''); }
       else if (act === 'refresh-audit') { invalidate('audit'); }
     } catch (e) { return fail(e); }
     render();
@@ -281,7 +307,7 @@
   });
 
   function setWs(id) {
-    V2.ws = id; V2.members = V2.audit = V2.conns = V2.cat = V2.catall = V2.sel = V2.result = null;
+    V2.ws = id; V2.members = V2.audit = V2.conns = V2.cat = V2.catall = V2.reqs = V2.sel = V2.result = null;
     try { if (id) localStorage.setItem(KEY, id); } catch { /* optional convenience */ }
   }
 

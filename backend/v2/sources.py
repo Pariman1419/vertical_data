@@ -98,9 +98,13 @@ def build(workspace_access, DB, audit):
             rev = cur.fetchone()["n"]
             cur.execute("insert into catalog_snapshot(connection_id,revision,payload) values (%s,%s,%s)",
                         (connection_id, rev, Json({"objects": objects})))
+            # a pending dataset request is fulfilled once its name shows up in the source catalog
+            cur.execute("update dataset_request set status='applied', closed_at=now() where connection_id=%s"
+                        " and status='pending' and dataset_name = any(%s) returning id", (connection_id, list(objects)))
+            closed = len(cur.fetchall())
         audit(db, request, "catalog.refresh", "allow", ws=ws, otype="connection", oid=connection_id,
-              detail={"revision": rev, "objects": len(objects)})
-        return {"revision": rev, "objects": len(objects)}
+              detail={"revision": rev, "objects": len(objects), "requests_applied": closed})
+        return {"revision": rev, "objects": len(objects), "requests_applied": closed}
 
     @r.get(base + "/catalog")
     def catalog(connection_id: uuid.UUID, ctx=Depends(workspace_access("catalog.read")), db=DB):

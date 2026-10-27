@@ -60,3 +60,11 @@
 - Fix: preview retries without LIMIT when the first attempt is `rejected`; row/byte/time budgets still bound the read. Live test added. Residual risk: for such sources the remote query is not row-limited server-side; only the 10 s / 1 MB stream cut applies (server-side cancel remains untested).
 - Disclosure: while reproducing, I ran `SELECT * ... LIMIT 3` against all 24 datasets, including the non-`_mock` ones, and printed only table names, column counts and row counts - no row values.
 - Test fix: `test_change_password_flow` counted all `password.change` audit rows in the shared DB and broke once the owner changed the real admin password; it now counts the test user's rows only.
+
+## 2026-10-27 — Dataset requests ("add a table to SPICE" from the UI) [TESTED LIVE (DB), MOCKED (catalog), UI not browser-tested]
+- Decision (owner): SPICE stays the only gateway; U-ETL does not connect to source databases and takes no DB credentials. Findings from the SPICE host report: datasets live in a read-only-mounted `spicepod.yaml`; reload behaviour unknown; no write API -> U-ETL files a request and renders the entry for the operator.
+- Migration 0004 `dataset_request` (+ trigger: only pending -> applied/cancelled, fields immutable; partial unique index on pending names). Down->up tested.
+- `backend/v2/dataset_requests.py`: profiles `pg` / `scada` only; remote object and dataset name are whitelist-regex validated before they can reach the rendered YAML; name clash with latest catalog -> 409; workspace-scoped, audited. `catalog/refresh` closes matching pending requests.
+- UI: request form + list + copyable entry on the Sources page (syntax-checked only).
+- Tests: `tests/v2/test_dataset_requests.py` -> full suite **71 passed**. YAML/SQL injection cases (quotes, newlines, `;`, `: `, extra dots) all rejected.
+- Not done: Oracle profiles (need sample from host), reload/restart result (needs the SPICE host test), automatic writer on the host (deferred, SPICE has no auth).

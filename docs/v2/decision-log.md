@@ -1,0 +1,22 @@
+# Decision log (Phase 1+)
+
+Gate 0 approved by owner on 2026-10-27 ("approve ตาม proposal"). Entries below record what changed from or was decided beyond `00-open-decisions.md`.
+
+| Date | ID | Decision | Why / consequence |
+|---|---|---|---|
+| 2026-10-27 | D1 | App baseline = `vertical_data` (git repo, tag `baseline-pilot`). Work on `feature/v2-phase1-foundation`. | Rollback = checkout tag; legacy launcher untouched. |
+| 2026-10-27 | D4,D6,D7,D9,D11,D12 | Accepted as proposed. | — |
+| 2026-10-27 | D10 | Local users, argon2id, behind an `IdentityProvider` seam. | SSO later. |
+| 2026-10-27 | D14 | No schedule dispatcher; only `schedule_policy.eligible` field. | — |
+| 2026-10-27 | D15 | Design references not fetched. | — |
+| 2026-10-27 | D5 (changed) | **Keep the existing vanilla-JS UI and extend it**; no React/Vite rewrite, no full redesign. New screens follow current look; new code uses event listeners, no inline handlers (audit R06). | Owner instruction. `04-light-luxury-design.md` tokens apply only as incremental polish. |
+| 2026-10-27 | D3 (changed) | PostgreSQL = existing shared server `10.151.28.2:5432`, DB `spiec_verti` (PG 13.6). Docker not installed; Redis 7.0.15 installed in WSL Ubuntu-24.04, bound to 127.0.0.1 with password, AOF on. | Owner supplied; Docker compose files are written but cannot be run here (Gate evidence = TESTED ISOLATED only for what actually ran). |
+| 2026-10-27 | schema names | Doc names `registry/staging/published` are implemented as `uetl_meta/uetl_staging/uetl_published`. | Server is shared with 35 other DBs; prefix avoids ambiguity. |
+| 2026-10-27 | roles | `uetl_migrator` (owns schemas, runs migrations) and `uetl_app` (DML only, no CREATE). Superuser `postgres` used only for `scripts/db/bootstrap_roles.py`. | Least privilege. |
+| 2026-10-27 | migrations tool | Small in-repo runner `backend/migrate.py` with paired `.up.sql/.down.sql` and stored checksums, instead of Alembic. | Alembic not installed; avoids new dependency for a SQL-only schema. Revisit if ORM models are added. |
+
+## Risks recorded
+- **Shared PG server:** default `PUBLIC` CONNECT on other databases means `uetl_*` roles can connect to them (not changed by us; DBA should restrict via `pg_hba.conf`/REVOKE). App always connects with a fixed DB name.
+- **Superuser password was pasted in chat** — recommend rotating after Phase 1.
+- Redis in WSL does not auto-start after reboot.
+- `pg_dump` / client tools not present locally: Gate 1 backup/restore may be `BLOCKED` unless installed.

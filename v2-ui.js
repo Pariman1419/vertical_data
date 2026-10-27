@@ -6,11 +6,11 @@
  */
 (function () {
   'use strict';
-  const V2 = { enabled: false, checked: false, user: null, csrf: '', workspaces: [], ws: null, members: null, audit: null, users: null, error: '', busy: false };
+  const V2 = { enabled: false, checked: false, user: null, csrf: '', workspaces: [], ws: null, members: null, audit: null, users: null, conns: null, catall: null, cat: null, sel: null, result: null, error: '', busy: false };
   const KEY = 'uetl.v2.workspace';
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const ROLES = ['viewer', 'author', 'reviewer', 'operator', 'admin'];
-  const PAGES = { v2ws: 'Workspaces', v2members: 'Members', v2audit: 'Audit trail', v2users: 'Users', v2account: 'Account' };
+  const PAGES = { v2ws: 'Workspaces', v2src: 'Sources (SPICE)', v2members: 'Members', v2audit: 'Audit trail', v2users: 'Users', v2account: 'Account' };
 
   async function api(method, path, body) {
     const res = await fetch('/api/v2' + path, {
@@ -30,7 +30,7 @@
     return data;
   }
 
-  function reset() { Object.assign(V2, { user: null, csrf: '', workspaces: [], ws: null, members: null, audit: null, users: null }); }
+  function reset() { Object.assign(V2, { user: null, csrf: '', workspaces: [], ws: null, members: null, audit: null, users: null, conns: null, catall: null, cat: null, sel: null, result: null }); }
   const role = () => (V2.workspaces.find(w => w.id === V2.ws) || {}).role || '';
   const isSuper = () => V2.user?.platform_role === 'superadmin';
   const canManage = () => isSuper() || role() === 'admin';
@@ -49,13 +49,13 @@
     V2.user = me.user; V2.csrf = me.csrf; V2.workspaces = me.workspaces;
     let saved = null; try { saved = localStorage.getItem(KEY); } catch { /* storage may be blocked */ }
     V2.ws = V2.workspaces.some(w => w.id === saved) ? saved : (V2.workspaces[0]?.id || null);
-    V2.members = V2.audit = V2.users = null; V2.error = '';
+    V2.members = V2.audit = V2.users = V2.conns = V2.catall = V2.cat = V2.sel = V2.result = null; V2.error = '';
   }
 
   let PAGES_ADDED = false;
   function addMenu() {
     PAGES_ADDED = true;
-    M.push(['v2ws', PAGES.v2ws], ['v2members', PAGES.v2members], ['v2audit', PAGES.v2audit], ['v2account', PAGES.v2account]);
+    M.push(['v2ws', PAGES.v2ws], ['v2src', PAGES.v2src], ['v2members', PAGES.v2members], ['v2audit', PAGES.v2audit], ['v2account', PAGES.v2account]);
   }
   function syncMenu() {
     const has = M.some(x => x[0] === 'v2users');
@@ -111,9 +111,50 @@
     if (p === 'v2ws') return wsPage();
     if (p === 'v2account') return accountPage();
     if (!V2.ws && p !== 'v2users') return intro(PAGES[p], 'Select or create a workspace first.') + banner();
+    if (p === 'v2src') return srcPage();
     if (p === 'v2members') return membersPage();
     if (p === 'v2audit') return auditPage();
     return usersPage();
+  }
+
+  const connUrl = () => `/workspaces/${V2.ws}/connections/${V2.sel}`;
+  const statusBadge = s => badge(esc(s), s === 'ok' ? 'ok' : s === 'failed' ? 'err' : 'warn');
+
+  function srcPage() {
+    load('conns', `/workspaces/${V2.ws}/connections`);
+    const list = V2.conns || [];
+    if (V2.sel && !list.some(c => c.id === V2.sel)) V2.sel = null;
+    if (!V2.sel && list.length) V2.sel = list[0].id;
+    const mgr = canManage();
+    const rows = list.map(c => `<tr><td>${esc(c.name)}</td><td><code>${esc(c.base_url)}</code></td><td>${statusBadge(c.status)}</td><td>${c.last_test_at ? esc(new Date(c.last_test_at).toLocaleString()) : '—'}</td>
+      <td><button type="button" data-v2="pick-conn" data-id="${esc(c.id)}">${c.id === V2.sel ? 'Selected' : 'Select'}</button>${mgr ? ` <button type="button" data-v2="test-conn" data-id="${esc(c.id)}">Test</button> <button type="button" data-v2="del-conn" data-id="${esc(c.id)}">Delete</button>` : ''}</td></tr>`).join('');
+    const add = mgr ? `<div class="title">Add connection</div><form class="card" data-v2-form="conn"><label class="field">Name<input name="name" required maxlength="100"></label>
+      <label class="field">SPICE HTTP URL<input name="base_url" required maxlength="300" placeholder="http://host:8091"></label>
+      <p class="muted">Only hosts on the server allowlist are accepted. SPICE data is read over Arrow Flight with row, size and time limits.</p><button class="primary">Add</button></form>` : '';
+    return intro('Sources (SPICE)', 'การเชื่อมต่อแหล่งข้อมูล, แค็ตตาล็อก และ preview แบบจำกัดขนาด') + banner() +
+      `<div class="card tablewrap"><table class="table"><thead><tr><th>Name</th><th>URL</th><th>Status</th><th>Last test</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="muted">No connections.</td></tr>'}</tbody></table></div>` +
+      add + (V2.sel ? catalogPanel(mgr) + previewPanel() : '');
+  }
+
+  function catalogPanel(mgr) {
+    load('cat', connUrl() + '/catalog');
+    if (mgr) load('catall', connUrl() + '/catalog/all');
+    const objs = Object.entries(V2.cat?.objects || {});
+    const names = objs.map(([n, o]) => `<tr><td><code>${esc(n)}</code></td><td>${o.columns.length}</td><td>${esc(o.columns.slice(0, 6).map(c => c.name).join(', '))}${o.columns.length > 6 ? '…' : ''}</td></tr>`).join('');
+    const picker = mgr ? `<div class="title">Allowed objects</div><form class="card" data-v2-form="allow"><p class="muted">Only ticked objects can be viewed or previewed in this workspace.</p>
+      <div class="v2-checks">${(V2.catall?.objects || []).map(o => `<label><input type="checkbox" name="obj" value="${esc(o.name)}" ${o.allowed ? 'checked' : ''}> ${esc(o.name)}</label>`).join('') || '<span class="muted">Refresh the catalog first.</span>'}</div>
+      <button class="primary">Save allowlist</button></form>` : '';
+    return `<div class="title">Catalog${V2.cat?.revision ? ` · revision ${V2.cat.revision}` : ''}</div>` + (mgr ? '<p><button type="button" data-v2="refresh-cat">Refresh catalog from source</button></p>' : '') +
+      `<div class="card tablewrap"><table class="table"><thead><tr><th>Object</th><th>Columns</th><th>First columns</th></tr></thead><tbody>${names || '<tr><td colspan="3" class="muted">No allowed objects.</td></tr>'}</tbody></table></div>` + picker;
+  }
+
+  function previewPanel() {
+    const objs = Object.entries(V2.cat?.objects || {});
+    if (!objs.length || (!isSuper() && !['author', 'operator', 'admin'].includes(role()))) return '';
+    const r = V2.result;
+    const table = r ? `<div class="card tablewrap"><table class="table"><thead><tr>${r.columns.map(c => `<th>${esc(c.name)}<br><small class="muted">${esc(c.type)}</small></th>`).join('')}</tr></thead><tbody>${r.rows.map(row => `<tr>${row.map(v => `<td>${v === null ? '<span class="muted">null</span>' : esc(v)}</td>`).join('')}</tr>`).join('')}</tbody></table>${r.truncated ? '<p class="muted">Truncated at the preview limit.</p>' : ''}</div>` : '';
+    return `<div class="title">Preview</div><form class="card" data-v2-form="preview"><label class="field">Object<select name="object">${objs.map(([n]) => `<option>${esc(n)}</option>`).join('')}</select></label>
+      <label class="field">Rows (1–1000)<input name="limit" type="number" min="1" max="1000" value="50"></label><button class="primary">Run preview</button></form>` + table;
   }
 
   function accountPage() {
@@ -193,6 +234,14 @@
       } else if (kind === 'workspace') {
         await api('POST', '/workspaces', { name: f.name, slug: f.slug });
         const me = await api('GET', '/auth/me'); V2.workspaces = me.workspaces; S.notice = 'Workspace created';
+      } else if (kind === 'conn') {
+        await api('POST', `/workspaces/${V2.ws}/connections`, { name: f.name, kind: 'rest', base_url: f.base_url });
+        invalidate('conns'); S.notice = 'Connection added';
+      } else if (kind === 'allow') {
+        await api('PUT', connUrl() + '/allowed-objects', { objects: new FormData(form).getAll('obj') });
+        invalidate('cat'); invalidate('catall'); S.notice = 'Allowlist saved';
+      } else if (kind === 'preview') {
+        V2.result = await api('POST', connUrl() + '/preview', { object: f.object, limit: Number(f.limit) || 50 });
       } else if (kind === 'member') {
         await api('POST', `/workspaces/${V2.ws}/members`, { username: f.username, role: f.role });
         invalidate('members'); S.notice = 'Member saved';
@@ -217,6 +266,10 @@
       if (act === 'logout') { await api('POST', '/auth/logout', {}); reset(); S.page = 'sources'; V2.error = ''; }
       else if (act === 'pick') { setWs(el.dataset.id); }
       else if (act === 'remove') { await api('DELETE', `/workspaces/${V2.ws}/members/${el.dataset.id}`); invalidate('members'); S.notice = 'Member removed'; }
+      else if (act === 'pick-conn') { V2.sel = el.dataset.id; V2.cat = V2.catall = V2.result = null; }
+      else if (act === 'test-conn') { V2.sel = el.dataset.id; const t = await api('POST', connUrl() + '/test'); invalidate('conns'); S.notice = t.status === 'ok' ? 'Connection OK' : 'Test failed: ' + t.error; }
+      else if (act === 'del-conn') { await api('DELETE', `/workspaces/${V2.ws}/connections/${el.dataset.id}`); V2.sel = null; V2.cat = V2.catall = V2.result = null; invalidate('conns'); S.notice = 'Connection deleted'; }
+      else if (act === 'refresh-cat') { const r = await api('POST', connUrl() + '/catalog/refresh'); invalidate('cat'); invalidate('catall'); S.notice = `Catalog revision ${r.revision}: ${r.objects} objects`; }
       else if (act === 'refresh-audit') { invalidate('audit'); }
     } catch (e) { return fail(e); }
     render();
@@ -228,7 +281,7 @@
   });
 
   function setWs(id) {
-    V2.ws = id; V2.members = V2.audit = null;
+    V2.ws = id; V2.members = V2.audit = V2.conns = V2.cat = V2.catall = V2.sel = V2.result = null;
     try { if (id) localStorage.setItem(KEY, id); } catch { /* optional convenience */ }
   }
 

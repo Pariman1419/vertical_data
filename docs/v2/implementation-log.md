@@ -45,3 +45,12 @@
 - Target 10.153.90.17 :8091/:50051 (owner-supplied). Full list of statements, results and the NOT-tested list in `09-spice-probe-results.md`.
 - Headline: no auth; REST has no streaming/row cap (2 M rows = 34.9 MB); Flight streams in 8,192-row batches and can be stopped early (0.03 s); decimal128 exact on Flight, exact text on REST; binds work on REST only; dialect DataFusion; errors leak internal names.
 - Not tested: writes/DDL rejection, server-side cancel, TLS, behaviour on large real tables.
+
+## 2026-10-27 — Phase 2 part 2 (owner approved the SPICE transport proposals with "ตกลง")
+- Decisions applied: Flight for data, REST only for health/datasets/DESCRIBE; numbers to the browser as strings when beyond JS-safe range or decimal; `pyarrow==25.0.1` pinned; Flight/REST concurrency 2 (`UETL_SPICE_CONCURRENCY`); preview budgets 1000 rows / 1 MB / 10 s.
+- `backend/v2/spice.py`: pinned-IP REST client, bounded Flight reader, typed literal formatter, SpiceError with fixed safe messages (raw text logged only). `backend/v2/sources.py`: `POST .../test` (fixed health + `SELECT 1`), `GET .../capabilities`, `POST .../catalog/refresh`, `GET .../catalog` (allow-listed objects only), `GET .../catalog/all` (admin), `POST .../preview` (allowlist + catalog columns + typed filters; no SQL text accepted; audited incl. denials/errors).
+- Config: `UETL_SPICE_ALLOWED_HOSTS=10.153.90.17:8091,10.153.90.17:50051` in git-ignored `.env`.
+- Bug found by test: pyarrow raises `ArrowInvalid` (not FlightError) when SPICE rejects SQL; it would have been a 500 leaking text. Now mapped to a safe 502. A test used a float literal and mis-blamed precision: DataFusion parses unquoted decimals as float64 - test now casts from a string.
+- UI: "Sources (SPICE)" page in `v2-ui.js` (connections, test, catalog refresh, allowlist picker, preview). [Syntax-checked only; NOT exercised in a browser this round.]
+- Tests: `tests/v2/test_sources.py` (10; 8 live against SPICE read-only) -> **44 passed**.
+- Still NOT tested: SPICE write/DDL rejection, server-side cancel, TLS, large real tables, secret-canary for token auth (SPICE has none), RSS-flat soak.

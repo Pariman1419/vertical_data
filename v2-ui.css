@@ -10,3 +10,6 @@
 .v2-ws-none { font-size: 12px; opacity: .8; letter-spacing: 0; }
 .tablewrap table td { white-space: normal; }
 @media (prefers-reduced-motion: reduce) { .v2-login * { transition: none !important; animation: none !important; } }
+
+.v2-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px 16px; margin: 8px 0 12px; max-height: 260px; overflow: auto; }
+.v2-checks label { display: flex; gap: 8px; align-items: center; }

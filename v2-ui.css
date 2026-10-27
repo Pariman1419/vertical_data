@@ -1,0 +1,12 @@
+/* v2 layer: only what the pilot stylesheets do not already provide. Uses the existing --line/--muted/--red tokens. */
+.v2-login { max-width: 420px; margin: 48px auto; }
+.v2-login .field { max-width: none; }
+.v2-error { border-color: var(--red, #a93232); color: var(--red, #a93232); margin: 12px 0; }
+.v2-who { font-weight: 600; }
+.v2-signout { margin-left: 8px; padding: 4px 10px; border: 1px solid var(--line, #dce3ee); border-radius: 8px; background: #fff; color: inherit; cursor: pointer; }
+.v2-signout:focus-visible, [data-v2]:focus-visible, [data-v2-ws]:focus-visible { outline: 2px solid #203f70; outline-offset: 2px; }
+.v2-ws-label { display: grid; gap: 6px; font-size: 11px; letter-spacing: .08em; }
+.v2-ws-label select { width: 100%; padding: 7px 8px; border-radius: 8px; border: 1px solid #6485ad; background: #0e1d38; color: #f5f8ff; font-size: 13px; letter-spacing: 0; }
+.v2-ws-none { font-size: 12px; opacity: .8; letter-spacing: 0; }
+.tablewrap table td { white-space: normal; }
+@media (prefers-reduced-motion: reduce) { .v2-login * { transition: none !important; animation: none !important; } }

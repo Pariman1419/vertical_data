@@ -10,7 +10,7 @@
   const KEY = 'uetl.v2.workspace';
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const ROLES = ['viewer', 'author', 'reviewer', 'operator', 'admin'];
-  const PAGES = { v2ws: 'Workspaces', v2members: 'Members', v2audit: 'Audit trail', v2users: 'Users' };
+  const PAGES = { v2ws: 'Workspaces', v2members: 'Members', v2audit: 'Audit trail', v2users: 'Users', v2account: 'Account' };
 
   async function api(method, path, body) {
     const res = await fetch('/api/v2' + path, {
@@ -55,7 +55,7 @@
   let PAGES_ADDED = false;
   function addMenu() {
     PAGES_ADDED = true;
-    M.push(['v2ws', PAGES.v2ws], ['v2members', PAGES.v2members], ['v2audit', PAGES.v2audit]);
+    M.push(['v2ws', PAGES.v2ws], ['v2members', PAGES.v2members], ['v2audit', PAGES.v2audit], ['v2account', PAGES.v2account]);
   }
   function syncMenu() {
     const has = M.some(x => x[0] === 'v2users');
@@ -109,10 +109,22 @@
   function v2Page() {
     const p = S.page;
     if (p === 'v2ws') return wsPage();
+    if (p === 'v2account') return accountPage();
     if (!V2.ws && p !== 'v2users') return intro(PAGES[p], 'Select or create a workspace first.') + banner();
     if (p === 'v2members') return membersPage();
     if (p === 'v2audit') return auditPage();
     return usersPage();
+  }
+
+  function accountPage() {
+    return intro('Account', `Signed in as ${esc(V2.user.username)}`) + banner() +
+      `<div class="title">Change password</div>
+       <form class="card" data-v2-form="password">
+       <label class="field">Current password<input name="current_password" type="password" required autocomplete="current-password" maxlength="256"></label>
+       <label class="field">New password (min 12 characters)<input name="new_password" type="password" required minlength="12" autocomplete="new-password" maxlength="256"></label>
+       <label class="field">Repeat new password<input name="repeat" type="password" required minlength="12" autocomplete="new-password" maxlength="256"></label>
+       <p class="muted">Other signed-in sessions of this account are signed out when the password changes.</p>
+       <button class="primary">Change password</button></form>`;
   }
 
   function wsPage() {
@@ -184,6 +196,10 @@
       } else if (kind === 'member') {
         await api('POST', `/workspaces/${V2.ws}/members`, { username: f.username, role: f.role });
         invalidate('members'); S.notice = 'Member saved';
+      } else if (kind === 'password') {
+        if (f.new_password !== f.repeat) throw new Error('The two new passwords do not match');
+        await api('POST', '/auth/change-password', { current_password: f.current_password, new_password: f.new_password });
+        S.notice = 'Password changed';
       } else if (kind === 'user') {
         await api('POST', '/users', { username: f.username, display_name: f.display_name || '', password: f.password });
         invalidate('users'); S.notice = 'User created';

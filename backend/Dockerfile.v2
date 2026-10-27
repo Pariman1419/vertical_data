@@ -1,0 +1,15 @@
+# UNTESTED: Docker is not installed on the development machine (see docs/v2/decision-log.md).
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+RUN useradd --system --uid 10001 uetl
+WORKDIR /app
+COPY backend/requirements-v2.txt backend/requirements-v2.txt
+RUN pip install --no-cache-dir -r backend/requirements-v2.txt
+COPY backend/__init__.py backend/__init__.py
+COPY backend/v2 backend/v2
+COPY index.html app.js demo-sync.js sync-ui.js dataset-workflow.js prototype.js real-source-ui.js v2-ui.js v2-ui.css styles.css ui-reference-theme.css ./
+COPY assets assets
+USER uetl
+EXPOSE 8443
+HEALTHCHECK --interval=15s --timeout=3s CMD python -c "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8443/healthz',timeout=2).status==200 else 1)"
+CMD ["python", "-m", "uvicorn", "backend.v2.app:app", "--host", "0.0.0.0", "--port", "8443"]

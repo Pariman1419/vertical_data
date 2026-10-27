@@ -238,3 +238,41 @@ def test_static_allowlist(env):
     assert c.get("/").status_code == 200
     assert c.get("/backend/v2/app.py").status_code == 404
     assert c.get("/.env").status_code == 404
+
+
+def test_change_password_flow(env):
+    a, b = env.client("t_author1"), env.client("t_author1")  # two live sessions of the same user
+    new = "a brand new passphrase 2"
+    assert a.post("/api/v2/auth/change-password", json={"current_password": "wrong", "new_password": new}).status_code == 400
+    assert a.post("/api/v2/auth/change-password", json={"current_password": PW, "new_password": "short"}).status_code == 422
+    assert a.post("/api/v2/auth/change-password", json={"current_password": PW, "new_password": PW}).status_code == 400
+    no_csrf = env.client(); no_csrf.cookies.update(a.cookies)
+    assert no_csrf.post("/api/v2/auth/change-password", json={"current_password": PW, "new_password": new}).status_code == 403
+    assert a.post("/api/v2/auth/change-password", json={"current_password": PW, "new_password": new}).status_code == 200
+    assert a.get("/api/v2/auth/me").status_code == 200          # current session survives
+    assert b.get("/api/v2/auth/me").status_code == 401          # other session revoked
+    c = env.client()
+    assert c.post("/api/v2/auth/login", json={"username": "t_author1", "password": PW}).status_code == 401
+    assert c.post("/api/v2/auth/login", json={"username": "t_author1", "password": new}).status_code == 200
+    env.cur.execute("select count(*) as n from audit_event where action='password.change' and outcome='allow'")
+    assert env.cur.fetchone()["n"] == 1
+
+
+def test_change_password_requires_authentication(env):
+    assert env.client().post("/api/v2/auth/change-password", json={"current_password": "x", "new_password": "y" * 12}).status_code == 401
+
+
+def test_wrong_current_password_counts_toward_lockout(env):
+    c = env.client("t_viewer1")
+    for _ in range(5):
+        assert c.post("/api/v2/auth/change-password", json={"current_password": "bad", "new_password": "z" * 14}).status_code == 400
+    assert env.client().post("/api/v2/auth/login", json={"username": "t_viewer1", "password": PW}).status_code == 429
+
+
+def test_transaction_commits_before_response_is_sent():
+    """Structural guard (not behavioural): default dependency scope would run commit AFTER the response is sent."""
+    import inspect
+    from backend.v2 import app as appmod
+    src = inspect.getsource(appmod)
+    assert 'DB = Depends(get_db, scope="function")' in src
+    assert "Depends(get_db)" not in src.replace('Depends(get_db, scope="function")', "")

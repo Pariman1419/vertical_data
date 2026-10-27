@@ -29,6 +29,10 @@ if not log.handlers:
     log.addHandler(_h)
     log.setLevel(logging.INFO)
 
+# function scope: the transaction commits (or rolls back) BEFORE the response is sent, so a client that
+# receives 200 can rely on the data being durable and visible to its next request.
+DB = Depends(get_db, scope="function")
+
 app = FastAPI(title="U-ETL v2", docs_url=None, redoc_url=None, openapi_url="/api/v2/openapi.json")
 
 UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
@@ -96,7 +100,7 @@ def deny(db, request, status, message, action, **kw):
     raise HTTPException(status, message)
 
 
-def current_user(request: Request, db=Depends(get_db)):
+def current_user(request: Request, db=DB):
     token = request.cookies.get(config.COOKIE_NAME)
     row = None
     if token:
@@ -118,7 +122,7 @@ def current_user(request: Request, db=Depends(get_db)):
     return row
 
 
-def superadmin(user=Depends(current_user), request: Request = None, db=Depends(get_db)):
+def superadmin(request: Request, user=Depends(current_user), db=DB):
     if user["platform_role"] != "superadmin":
         deny(db, request, 403, "Insufficient permission", "platform.denied")
     return user
@@ -126,7 +130,7 @@ def superadmin(user=Depends(current_user), request: Request = None, db=Depends(g
 
 def workspace_access(permission):
     """Dependency factory: membership (404 if none, so existence is not leaked) then permission (403)."""
-    def dep(workspace_id: uuid.UUID, request: Request, user=Depends(current_user), db=Depends(get_db)):
+    def dep(workspace_id: uuid.UUID, request: Request, user=Depends(current_user), db=DB):
         if user["platform_role"] == "superadmin":
             role = "admin"
         else:
@@ -152,6 +156,11 @@ class UserIn(BaseModel):
     username: str = Field(pattern=r"^[A-Za-z0-9._-]{3,64}$")
     display_name: str = Field(default="", max_length=100)
     password: str = Field(min_length=12, max_length=256)
+
+
+class PasswordChangeIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
 
 
 class WorkspaceIn(BaseModel):
@@ -200,7 +209,7 @@ def readyz():
 
 # ---------- auth ----------
 @app.post("/api/v2/auth/login")
-def login(body: LoginIn, request: Request, response: Response, db=Depends(get_db)):
+def login(body: LoginIn, request: Request, response: Response, db=DB):
     if not same_origin(request):
         deny(db, request, 403, "Cross-origin request rejected", "login.origin")
     with db.cursor() as cur:
@@ -219,6 +228,7 @@ def login(body: LoginIn, request: Request, response: Response, db=Depends(get_db
         deny(db, request, 401, "Invalid username or password", "login.failed", actor=u["id"] if u else None)
     token, csrf = security.new_token(), security.new_token()
     with db.cursor() as cur:
+        cur.execute("delete from app_session where expires_at < now() - interval '1 day'")
         cur.execute("update app_user set failed_logins=0, locked_until=null where id=%s", (u["id"],))
         cur.execute("insert into app_session(id_hash,user_id,csrf_token,expires_at,ip)"
                     " values (%s,%s,%s,now()+make_interval(mins=>%s),%s)",
@@ -243,7 +253,7 @@ def _public_user(u):
 
 
 @app.post("/api/v2/auth/logout")
-def logout(request: Request, response: Response, user=Depends(current_user), db=Depends(get_db)):
+def logout(request: Request, response: Response, user=Depends(current_user), db=DB):
     with db.cursor() as cur:
         cur.execute("update app_session set revoked_at=now() where id_hash=%s", (security.token_hash(request.cookies[config.COOKIE_NAME]),))
     audit(db, request, "logout", "allow")
@@ -251,8 +261,31 @@ def logout(request: Request, response: Response, user=Depends(current_user), db=
     return {"status": "signed_out"}
 
 
+@app.post("/api/v2/auth/change-password")
+def change_password(body: PasswordChangeIn, request: Request, user=Depends(current_user), db=DB):
+    with db.cursor() as cur:
+        cur.execute("select password_hash from app_user where id=%s", (user["id"],))
+        current_hash = cur.fetchone()["password_hash"]
+    if not security.verify_password(current_hash, body.current_password):
+        with db.cursor() as cur:  # a wrong "current password" counts toward the same lockout as a wrong login
+            cur.execute("update app_user set failed_logins=failed_logins+1,"
+                        " locked_until=case when failed_logins+1>=%s then now()+make_interval(mins=>%s) else locked_until end"
+                        " where id=%s", (config.MAX_FAILED_LOGINS, config.LOCKOUT_MINUTES, user["id"]))
+        deny(db, request, 400, "Current password is incorrect", "password.change.failed")
+    if security.verify_password(current_hash, body.new_password):
+        raise HTTPException(400, "New password must differ from the current one")
+    with db.cursor() as cur:
+        cur.execute("update app_user set password_hash=%s, failed_logins=0 where id=%s",
+                    (security.hash_password(body.new_password), user["id"]))
+        # every other session of this user is revoked; the current one stays signed in
+        cur.execute("update app_session set revoked_at=now() where user_id=%s and revoked_at is null and id_hash<>%s",
+                    (user["id"], security.token_hash(request.cookies[config.COOKIE_NAME])))
+    audit(db, request, "password.change", "allow", otype="user", oid=user["id"])
+    return {"status": "changed"}
+
+
 @app.get("/api/v2/auth/me")
-def me(user=Depends(current_user), db=Depends(get_db)):
+def me(user=Depends(current_user), db=DB):
     with db.cursor() as cur:
         if user["platform_role"] == "superadmin":
             cur.execute("select id,slug,name,'admin' as role from workspace order by name")
@@ -265,14 +298,14 @@ def me(user=Depends(current_user), db=Depends(get_db)):
 
 # ---------- platform users / workspaces ----------
 @app.get("/api/v2/users")
-def list_users(user=Depends(superadmin), db=Depends(get_db)):
+def list_users(user=Depends(superadmin), db=DB):
     with db.cursor() as cur:
         cur.execute("select id,username,display_name,platform_role,is_active,created_at from app_user order by username")
         return cur.fetchall()
 
 
 @app.post("/api/v2/users", status_code=201)
-def create_user(body: UserIn, request: Request, user=Depends(superadmin), db=Depends(get_db)):
+def create_user(body: UserIn, request: Request, user=Depends(superadmin), db=DB):
     with db.cursor() as cur:
         cur.execute("select 1 from app_user where lower(username)=lower(%s)", (body.username,))
         if cur.fetchone():
@@ -285,12 +318,12 @@ def create_user(body: UserIn, request: Request, user=Depends(superadmin), db=Dep
 
 
 @app.get("/api/v2/workspaces")
-def list_workspaces(user=Depends(current_user), db=Depends(get_db)):
+def list_workspaces(user=Depends(current_user), db=DB):
     return me(user, db)["workspaces"]
 
 
 @app.post("/api/v2/workspaces", status_code=201)
-def create_workspace(body: WorkspaceIn, request: Request, user=Depends(superadmin), db=Depends(get_db)):
+def create_workspace(body: WorkspaceIn, request: Request, user=Depends(superadmin), db=DB):
     with db.cursor() as cur:
         cur.execute("select 1 from workspace where slug=%s", (body.slug,))
         if cur.fetchone():
@@ -305,7 +338,7 @@ def create_workspace(body: WorkspaceIn, request: Request, user=Depends(superadmi
 
 # ---------- members ----------
 @app.get("/api/v2/workspaces/{workspace_id}/members")
-def list_members(ctx=Depends(workspace_access("user.manage")), db=Depends(get_db)):
+def list_members(ctx=Depends(workspace_access("user.manage")), db=DB):
     with db.cursor() as cur:
         cur.execute("select u.id,u.username,u.display_name,m.role from membership m join app_user u on u.id=m.user_id"
                     " where m.workspace_id=%s order by u.username", (ctx["workspace_id"],))
@@ -313,7 +346,7 @@ def list_members(ctx=Depends(workspace_access("user.manage")), db=Depends(get_db
 
 
 @app.post("/api/v2/workspaces/{workspace_id}/members", status_code=201)
-def add_member(body: MemberIn, request: Request, ctx=Depends(workspace_access("user.manage")), db=Depends(get_db)):
+def add_member(body: MemberIn, request: Request, ctx=Depends(workspace_access("user.manage")), db=DB):
     ws = ctx["workspace_id"]
     with db.cursor() as cur:
         cur.execute("select id from app_user where lower(username)=lower(%s) and is_active", (body.username,))
@@ -327,7 +360,7 @@ def add_member(body: MemberIn, request: Request, ctx=Depends(workspace_access("u
 
 
 @app.delete("/api/v2/workspaces/{workspace_id}/members/{user_id}")
-def remove_member(user_id: uuid.UUID, request: Request, ctx=Depends(workspace_access("user.manage")), db=Depends(get_db)):
+def remove_member(user_id: uuid.UUID, request: Request, ctx=Depends(workspace_access("user.manage")), db=DB):
     ws = ctx["workspace_id"]
     with db.cursor() as cur:
         cur.execute("select role from membership where workspace_id=%s and user_id=%s", (ws, user_id))
@@ -345,7 +378,7 @@ def remove_member(user_id: uuid.UUID, request: Request, ctx=Depends(workspace_ac
 
 # ---------- audit ----------
 @app.get("/api/v2/workspaces/{workspace_id}/audit-events")
-def audit_events(limit: int = 100, ctx=Depends(workspace_access("settings.manage")), db=Depends(get_db)):
+def audit_events(limit: int = 100, ctx=Depends(workspace_access("settings.manage")), db=DB):
     with db.cursor() as cur:
         cur.execute("select a.id,a.at,a.correlation_id,u.username as actor,a.action,a.object_type,a.object_id,a.outcome"
                     " from audit_event a left join app_user u on u.id=a.actor_user_id"

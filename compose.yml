@@ -1,0 +1,22 @@
+# UNTESTED (no Docker on the dev machine). PostgreSQL is the EXISTING shared server; nothing here creates a database.
+# Secrets come from the git-ignored .env / Docker secrets, never from this file.
+services:
+  api:
+    build: { context: ., dockerfile: backend/Dockerfile.v2 }
+    env_file: .env
+    environment:
+      UETL_COOKIE_SECURE: "${UETL_COOKIE_SECURE:-true}"
+    ports: ["127.0.0.1:8443:8443"]      # loopback only; put a TLS reverse proxy in front for shared use
+    depends_on: [redis]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+  redis:
+    image: redis:7.0
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${UETL_REDIS_PASSWORD:?set UETL_REDIS_PASSWORD}", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    volumes: ["redis-data:/data"]
+    expose: ["6379"]                     # internal network only, not published
+    restart: unless-stopped
+volumes:
+  redis-data: {}

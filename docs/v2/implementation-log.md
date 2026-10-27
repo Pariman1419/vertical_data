@@ -25,3 +25,10 @@
 - UI bugs found by looking at it and fixed: tables lacked the pilot's `class="table"`; the Users menu was added after the pilot built the nav; the first created workspace was shown in the selector but `V2.ws` stayed null.
 - Observation: the first screenshot after a navigation timed out twice (CDP, 30 s) then worked; server login took 230 ms. Not reproduced as a page hang; treat as browser-tool timing, unconfirmed.
 - Data left in `spiec_verti`: user `admin`, workspace `main` (+1 membership, audit rows). Tests leave nothing.
+
+## 2026-10-27 — tooling + Docker verification
+- Installed (owner-requested): PostgreSQL 17.11 command-line tools only (no server/service), Docker Desktop 4.97.0 (Engine 29.9.2, Compose v5.6.1).
+- `pg_dump` 17.11 against PG 13.6 as `uetl_migrator`, `--schema-only -n uetl_meta`: OK, 19 tables, no secrets in output. [TESTED LIVE, read-only]
+- `docker compose build/up`: api healthy; `/healthz` 200; `/readyz` 200; Redis stopped -> 503 (healthz 200) -> restarted -> 200. Hardening verified via `docker inspect`/exec. [TESTED LIVE]
+- Fixes found by running it: compose now overrides `UETL_REDIS_URL` (the `.env` value pointed at host 127.0.0.1); added `.dockerignore`.
+- Not done: restore round-trip (needs a throwaway schema; awaiting approval).

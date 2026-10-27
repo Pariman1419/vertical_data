@@ -1,0 +1,11 @@
+.env
+.env.*
+.git
+node_modules
+.spike-venv
+__pycache__
+*.pyc
+*.pem
+*.sqlite3*
+docs
+tests

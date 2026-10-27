@@ -2,7 +2,7 @@
 
 Date: 2026-10-27. Branch `feature/v2-phase1-foundation`. Evidence labels: TESTED LIVE (real `spiec_verti`, 10.151.28.2, PG 13.6), TESTED ISOLATED, MOCKED, BLOCKED, UNTESTED.
 
-## Verdict: NOT PASSED — 4 acceptance items open (see "Open"). Do not start Phase 2 without owner decision.
+## Verdict: NOT PASSED — 2 acceptance items open (see "Open"). Do not start Phase 2 without owner decision.
 
 ## Acceptance vs evidence
 | Gate 1 criterion | Status | Evidence |
@@ -16,8 +16,8 @@ Date: 2026-10-27. Branch `feature/v2-phase1-foundation`. Evidence labels: TESTED
 | Sessions, CSRF, secure cookies | PASS · TESTED LIVE | HttpOnly/Secure/SameSite=Strict; CSRF + Origin enforced on every unsafe method; logout and password change revoke sessions; lockout after 5 failures |
 | Audit trail | PASS · TESTED LIVE | append-only via trigger (UPDATE/DELETE/TRUNCATE rejected); UI shows events |
 | Secret handling | PASS · TESTED LIVE | canary password absent from responses and logs; `.env` git-ignored; passwords argon2id; only `secret_ref` names stored |
-| Dependency health | PASS · TESTED LIVE | `/readyz` pings PG and Redis; 503 on failure (unit-tested path: PG down not simulated → **not tested**) |
-| Docker Compose services | UNTESTED | `compose.yml`, `backend/Dockerfile.v2` written; no Docker available |
+| Dependency health | PASS (Redis) · TESTED LIVE | `/readyz` 200 → Redis stopped → 503 while `/healthz` stays 200 → Redis restarted → 200. PG-down path not simulated (shared server, not ours to stop) |
+| Docker Compose services | PASS · TESTED LIVE | Docker Desktop 29.9.2: `compose build` + `up`; api healthy, container reaches shared PG and its own Redis; runs as uid 10001, read-only rootfs, cap_drop ALL, no-new-privileges; Redis not published; `.env` not in the image. API login/UI not re-driven inside the container (covered in-process and on the host) |
 | Separate DB roles/schemas | PASS · TESTED LIVE | `uetl_migrator` (DDL) vs `uetl_app` (DML, DDL denied); `postgres` used once for bootstrap |
 | Light Luxury UI (login/shell/workspace/users) | PASS (scope-adjusted) · manual Chrome check | Owner changed scope to "extend existing UI"; verified login, workspaces, members, audit, users, account pages. No axe/keyboard audit run |
 
@@ -27,10 +27,9 @@ Tests: `tests/v2` — 26 passed (DB guards 6, API 20). Legacy pilot test suite (
 `inet` rejects non-IP client host; psycopg2 UUID adapter; UUID in log JSON; tables missing pilot `class="table"`; Users menu built too late; first workspace not selected; **transaction committed after the HTTP response** (FastAPI dependency scope) — fixed with function scope, guarded by a structural test only.
 
 ## Open
-1. Backup/restore (install PostgreSQL client tools, then test round-trip in a throwaway schema).
-2. Docker compose never run.
-3. API-level forged-approval test (needs Phase 4 route) — DB-level only for now.
-4. `/readyz` failure path, axe/keyboard checks, and the legacy `npm test` not run.
+1. Backup/restore round-trip: `pg_dump` 17.11 installed and a schema-only dump of `uetl_meta` succeeded (read-only); the restore half needs a throwaway schema/database and awaits owner approval.
+2. API-level forged-approval test (needs Phase 4 route) — DB-level only for now.
+3. Not run: PG-down readiness path, axe/keyboard checks, legacy `npm test`.
 
 ## Known risks carried forward
 - Shared PG server: default `PUBLIC CONNECT` on other DBs lets `uetl_*` roles connect to them (DBA action).

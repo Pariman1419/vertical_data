@@ -22,4 +22,7 @@ Python 3.12, `pip install -r backend/requirements-v2-dev.txt`, a git-ignored `.e
 `git checkout baseline-pilot` and use `Start U-ETL Test.bat`; v2 tables are untouched by the pilot and can stay or be dropped with `migrate.py down`.
 
 ## Known limits
-Docker files are UNTESTED. Backup/restore is BLOCKED (no `pg_dump`). Redis in WSL does not auto-start. Legacy Oracle routes are not served by the v2 server.
+Backup: `pg_dump` is at `C:\Program Files\PostgreSQLin` (not on PATH); restore round-trip not yet tested. Redis in WSL does not auto-start. Legacy Oracle routes are not served by the v2 server.
+
+## Docker
+`docker compose up -d --build` (needs `UETL_REDIS_PASSWORD` in `.env`; API on 127.0.0.1:8443, Redis internal only). `docker compose down` to stop. Docker CLI: `C:\Program Files\Docker\Dockeresourcesin` if not on PATH.

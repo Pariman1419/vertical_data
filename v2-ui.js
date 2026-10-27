@@ -68,12 +68,15 @@
   navPage = p => (PAGES[p] ? p : baseNav(p));
   page = () => (PAGES[S.page] ? v2Page() : basePage());
   layout = function () {
+    if (V2.enabled && V2.user) {
+      if (!V2.workspaces.some(w => w.id === V2.ws)) setWs(V2.workspaces[0]?.id || null); // keep selector and state in step
+      syncMenu(); // must run before the pilot shell builds the nav
+    }
     baseLayout();
     if (!V2.enabled) return;
     const shell = document.querySelector('.shell');
     if (!V2.checked) { shell.innerHTML = '<main class="main"><section class="content"><p class="muted">Loading…</p></section></main>'; return; }
     if (!V2.user) { shell.innerHTML = loginMarkup(); return; }
-    syncMenu();
     decorate();
   };
 
@@ -116,7 +119,7 @@
     const rows = V2.workspaces.map(w => `<tr><td>${esc(w.name)}</td><td><code>${esc(w.slug)}</code></td><td>${roleBadge(w.role)}</td><td>${w.id === V2.ws ? badge('Active') : `<button type="button" data-v2="pick" data-id="${esc(w.id)}">Use</button>`}</td></tr>`).join('');
     const create = isSuper() ? `<div class="title">Create workspace</div><form class="card" data-v2-form="workspace"><label class="field">Name<input name="name" required maxlength="100"></label><label class="field">Slug (a-z, 0-9, -)<input name="slug" required pattern="[a-z0-9][a-z0-9-]{1,40}"></label><button class="primary">Create</button></form>` : '';
     return intro('Workspaces', 'ข้อมูลและสิทธิ์ถูกแยกตาม Workspace; ผู้ใช้เห็นเฉพาะ Workspace ที่เป็นสมาชิก') + banner() +
-      `<div class="card tablewrap"><table><thead><tr><th>Name</th><th>Slug</th><th>Your role</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="muted">No workspaces.</td></tr>'}</tbody></table></div>` + create;
+      `<div class="card tablewrap"><table class="table"><thead><tr><th>Name</th><th>Slug</th><th>Your role</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="muted">No workspaces.</td></tr>'}</tbody></table></div>` + create;
   }
 
   function membersPage() {
@@ -124,7 +127,7 @@
     load('members', `/workspaces/${V2.ws}/members`);
     const rows = (V2.members || []).map(m => `<tr><td>${esc(m.username)}</td><td>${esc(m.display_name)}</td><td>${roleBadge(m.role)}</td><td><button type="button" data-v2="remove" data-id="${esc(m.id)}">Remove</button></td></tr>`).join('');
     return intro('Members', 'กำหนด role ต่อ Workspace: viewer · author · reviewer · operator · admin') + banner() +
-      `<div class="card tablewrap">${V2.members ? `<table><thead><tr><th>Username</th><th>Name</th><th>Role</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="muted">Loading…</p>'}</div>
+      `<div class="card tablewrap">${V2.members ? `<table class="table"><thead><tr><th>Username</th><th>Name</th><th>Role</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="muted">Loading…</p>'}</div>
        <div class="title">Add or change a member</div>
        <form class="card" data-v2-form="member"><label class="field">Username<input name="username" required maxlength="100"></label>
        <label class="field">Role<select name="role">${ROLES.map(r => `<option>${r}</option>`).join('')}</select></label>
@@ -136,7 +139,7 @@
     load('audit', `/workspaces/${V2.ws}/audit-events?limit=100`);
     const rows = (V2.audit || []).map(a => `<tr><td>${esc(new Date(a.at).toLocaleString())}</td><td>${esc(a.actor || '—')}</td><td>${esc(a.action)}</td><td>${badge(esc(a.outcome), a.outcome === 'allow' ? 'ok' : 'err')}</td><td><code>${esc((a.correlation_id || '').slice(0, 8))}</code></td></tr>`).join('');
     return intro('Audit trail', 'บันทึกแบบ append-only: แก้ไขหรือลบไม่ได้ แม้ผ่านฐานข้อมูล', '<button type="button" data-v2="refresh-audit">Refresh</button>') + banner() +
-      `<div class="card tablewrap">${V2.audit ? `<table><thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Outcome</th><th>Ref</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="muted">No events.</td></tr>'}</tbody></table>` : '<p class="muted">Loading…</p>'}</div>`;
+      `<div class="card tablewrap">${V2.audit ? `<table class="table"><thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Outcome</th><th>Ref</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="muted">No events.</td></tr>'}</tbody></table>` : '<p class="muted">Loading…</p>'}</div>`;
   }
 
   function usersPage() {
@@ -144,7 +147,7 @@
     load('users', '/users');
     const rows = (V2.users || []).map(u => `<tr><td>${esc(u.username)}</td><td>${esc(u.display_name)}</td><td>${u.platform_role === 'superadmin' ? badge('platform admin') : ''}</td><td>${u.is_active ? badge('Active') : badge('Disabled', 'err')}</td></tr>`).join('');
     return intro('Users', 'บัญชีผู้ใช้ภายใน (รหัสผ่านเก็บเป็น argon2id hash)') + banner() +
-      `<div class="card tablewrap">${V2.users ? `<table><thead><tr><th>Username</th><th>Name</th><th></th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="muted">Loading…</p>'}</div>
+      `<div class="card tablewrap">${V2.users ? `<table class="table"><thead><tr><th>Username</th><th>Name</th><th></th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="muted">Loading…</p>'}</div>
        <div class="title">Create user</div>
        <form class="card" data-v2-form="user"><label class="field">Username<input name="username" required pattern="[A-Za-z0-9._-]{3,64}" maxlength="64" autocomplete="off"></label>
        <label class="field">Display name<input name="display_name" maxlength="100"></label>
@@ -210,7 +213,7 @@
 
   function setWs(id) {
     V2.ws = id; V2.members = V2.audit = null;
-    try { localStorage.setItem(KEY, id); } catch { /* optional convenience */ }
+    try { if (id) localStorage.setItem(KEY, id); } catch { /* optional convenience */ }
   }
 
   boot();

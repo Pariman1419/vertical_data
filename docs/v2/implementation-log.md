@@ -18,3 +18,10 @@
 - Pre-existing, not ours: `sync-ui.js:33` calls `render()` before `prototype.js` is loaded -> console `ReferenceError: datasets is not defined` on first paint; UI recovers.
 - Legacy Oracle `/api/*` routes are NOT served by the v2 server (D12: direct Oracle off by default). The pilot still runs through `Start U-ETL Test.bat`.
 - Known gaps: Gate 1 forged-approval is covered at DB level (triggers) only; the approval HTTP route arrives in Phase 4. Backup/restore BLOCKED (no pg_dump). Docker compose not written/run (no Docker). CSP keeps `unsafe-inline` for the legacy shell (audit R06).
+
+## 2026-10-27 — UI verified in Chrome (TESTED LIVE, manual)
+- Bootstrap superadmin `admin` created via `python -m backend.v2.cli create-superadmin` (random password handed to the owner; no change-password feature yet — Phase 1 follow-up).
+- Verified at `http://127.0.0.1:8443/`: login, session restore after reload, workspace create (audited), workspace selector, Members, Audit trail (shows `workspace.create` allow), Users, Sign out button present.
+- UI bugs found by looking at it and fixed: tables lacked the pilot's `class="table"`; the Users menu was added after the pilot built the nav; the first created workspace was shown in the selector but `V2.ws` stayed null.
+- Observation: the first screenshot after a navigation timed out twice (CDP, 30 s) then worked; server login took 230 ms. Not reproduced as a page hang; treat as browser-tool timing, unconfirmed.
+- Data left in `spiec_verti`: user `admin`, workspace `main` (+1 membership, audit rows). Tests leave nothing.

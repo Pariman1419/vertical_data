@@ -148,3 +148,13 @@ def test_errors_never_leak_source_text(env, conn):
         spice.run_bounded(LIVE, "SELECT * FROM no_such_table_zz", max_rows=1)
     assert "spice.public" not in str(e.value) and "no_such_table_zz" not in str(e.value)
     assert json.dumps(c.post(url + "/test").json()).count("spice.public") == 0
+
+
+@live
+def test_preview_works_for_sources_that_reject_limit_pushdown(env, conn):
+    c, url = conn                      # 'alarm' is backed by SQL Server, which rejects the pushed-down LIMIT
+    c.post(url + "/catalog/refresh")
+    c.put(url + "/allowed-objects", json={"objects": ["alarm"]})
+    r = c.post(url + "/preview", json={"object": "alarm", "limit": 3})
+    assert r.status_code == 200, r.text
+    assert len(r.json()["rows"]) == 3 and r.json()["truncated"] is True

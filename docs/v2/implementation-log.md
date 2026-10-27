@@ -54,3 +54,9 @@
 - UI: "Sources (SPICE)" page in `v2-ui.js` (connections, test, catalog refresh, allowlist picker, preview). [Syntax-checked only; NOT exercised in a browser this round.]
 - Tests: `tests/v2/test_sources.py` (10; 8 live against SPICE read-only) -> **44 passed**.
 - Still NOT tested: SPICE write/DDL rejection, server-side cancel, TLS, large real tables, secret-canary for token auth (SPICE has none), RSS-flat soak.
+
+## 2026-10-27 — Owner UI test finding: preview rejected for some datasets [TESTED LIVE]
+- Owner's preview of some objects returned "The source rejected the request." Reproduced: SPICE pushes `LIMIT n` down to the underlying database; **SQL Server-backed datasets (`alarm`, `tooling_log`, `cim_machine_profile`) fail with "Incorrect syntax near 'n'"**. Subquery-LIMIT and FETCH FIRST are rejected too. Without LIMIT the Flight stream starts at once and `run_bounded` cuts it (0.3–1.5 s for 3 rows).
+- Fix: preview retries without LIMIT when the first attempt is `rejected`; row/byte/time budgets still bound the read. Live test added. Residual risk: for such sources the remote query is not row-limited server-side; only the 10 s / 1 MB stream cut applies (server-side cancel remains untested).
+- Disclosure: while reproducing, I ran `SELECT * ... LIMIT 3` against all 24 datasets, including the non-`_mock` ones, and printed only table names, column counts and row counts - no row values.
+- Test fix: `test_change_password_flow` counted all `password.change` audit rows in the shared DB and broke once the owner changed the real admin password; it now counts the test user's rows only.

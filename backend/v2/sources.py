@@ -148,7 +148,17 @@ def build(workspace_access, DB, audit):
         except ValueError:
             raise HTTPException(422, "Filter value does not fit the column type") from None
         try:
-            cols, rows, truncated = spice.run_bounded(c, sql, max_rows=body.limit)
+            try:
+                cols, rows, truncated = spice.run_bounded(c, sql, max_rows=body.limit)
+            except spice.SpiceError as e:
+                if e.code != "rejected":
+                    raise
+                # SPICE pushes LIMIT down to the underlying database; SQL Server-backed datasets reject it
+                # (observed live: alarm, tooling_log, cim_machine_profile). Retry without LIMIT: the stream is
+                # still cut at max_rows / bytes / seconds by run_bounded, so the read stays bounded.
+                sql = spice.build_select(body.object, {"select": body.columns, "types": types},
+                                         [f.model_dump() for f in body.filters], None)
+                cols, rows, truncated = spice.run_bounded(c, sql, max_rows=body.limit)
         except spice.SpiceError as e:
             audit(db, request, "preview.run", "error", ws=ws, otype="connection", oid=connection_id,
                   detail={"object": body.object, "code": e.code})

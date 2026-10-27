@@ -252,7 +252,8 @@ def test_change_password_flow(env):
     c = env.client()
     assert c.post("/api/v2/auth/login", json={"username": "t_author1", "password": PW}).status_code == 401
     assert c.post("/api/v2/auth/login", json={"username": "t_author1", "password": new}).status_code == 200
-    env.cur.execute("select count(*) as n from audit_event where action='password.change' and outcome='allow'")
+    env.cur.execute("select count(*) as n from audit_event e join app_user u on u.id=e.actor_user_id"
+                    " where e.action='password.change' and e.outcome='allow' and u.username='t_author1'")
     assert env.cur.fetchone()["n"] == 1
 
 

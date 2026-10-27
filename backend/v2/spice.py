@@ -171,7 +171,7 @@ def build_select(obj, columns, filters, limit):
     if filters:
         parts = [f'"{f["column"]}" {OPS[f["op"]]} {literal(columns["types"][f["column"]], f["value"])}' for f in filters]
         where = " WHERE " + " AND ".join(parts)
-    return f"SELECT {sel} FROM {quote(obj)}{where} LIMIT {int(limit)}"
+    return f"SELECT {sel} FROM {quote(obj)}{where}" + (f" LIMIT {int(limit)}" if limit else "")
 
 
 # ---------- Flight ----------

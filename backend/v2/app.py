@@ -400,6 +400,7 @@ STATIC = {"/": "index.html", "/index.html": "index.html", "/styles.css": "styles
           "/dataset-workflow.js": "dataset-workflow.js", "/prototype.js": "prototype.js",
           "/real-source-ui.js": "real-source-ui.js", "/v2-ui.js": "v2-ui.js", "/v2-ui.css": "v2-ui.css"}
 STATIC["/v2-main.js"] = "v2-main.js"
+STATIC["/v2-store.js"] = "v2-store.js"
 # Manifest entries, rather than a directory mount, define the vendor allowlist.
 for _vendor_file in json.loads((config.ROOT / "vendor/tanstack/MANIFEST.json").read_text()):
     STATIC["/vendor/tanstack/" + _vendor_file] = "vendor/tanstack/" + _vendor_file

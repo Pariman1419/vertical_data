@@ -6,7 +6,8 @@
  */
 (function () {
   'use strict';
-  const V2 = { enabled: false, checked: false, user: null, csrf: '', workspaces: [], ws: null, members: null, audit: null, users: null, conns: null, catall: null, cat: null, reqs: null, sel: null, result: null, error: '', busy: false };
+  const V2 = new Proxy({}, { get: (_, key) => V2Store.get(key), set: (_, key, value) => { V2Store.set({ [key]: value }); return true; } });
+  let generation = 0;
   const KEY = 'uetl.v2.workspace';
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const ROLES = ['viewer', 'author', 'reviewer', 'operator', 'admin'];
@@ -30,7 +31,7 @@
     return data;
   }
 
-  function reset() { Object.assign(V2, { user: null, csrf: '', workspaces: [], ws: null, members: null, audit: null, users: null, conns: null, catall: null, cat: null, reqs: null, sel: null, result: null }); }
+  function reset() { generation++; V2Query.clear(); Object.assign(V2, { user: null, csrf: '', workspaces: [], ws: null, members: null, audit: null, users: null, conns: null, catall: null, cat: null, reqs: null, sel: null, result: null, previewBusy: false }); }
   const role = () => (V2.workspaces.find(w => w.id === V2.ws) || {}).role || '';
   const isSuper = () => V2.user?.platform_role === 'superadmin';
   const canManage = () => isSuper() || role() === 'admin';
@@ -42,7 +43,7 @@
       adopt(me);
     } catch { /* 401 = signed out, anything else = legacy server */ }
     V2.checked = true;
-    if (V2.enabled) { PAGES_ADDED || addMenu(); render(); }
+    if (V2.enabled) { PAGES_ADDED || addMenu(); if (location.hash.startsWith('#/')) applyRoute(); render(); }
   }
 
   function adopt(me) {
@@ -68,6 +69,8 @@
   navPage = p => (PAGES[p] ? p : baseNav(p));
   page = () => (PAGES[S.page] ? v2Page() : basePage());
   layout = function () {
+    const routePage = { v2src: 'sources', v2ws: 'workspaces', v2members: 'members', v2audit: 'audit', v2users: 'users', v2account: 'account' }[S.page];
+    if (V2.user && routePage && V2Route.current().page !== routePage) V2Route.go(routePage);
     if (V2.enabled && V2.user) {
       if (!V2.workspaces.some(w => w.id === V2.ws)) setWs(V2.workspaces[0]?.id || null); // keep selector and state in step
       syncMenu(); // must run before the pilot shell builds the nav
@@ -123,7 +126,7 @@
   function srcPage() {
     load('conns', `/workspaces/${V2.ws}/connections`);
     const list = V2.conns || [];
-    if (V2.sel && !list.some(c => c.id === V2.sel)) V2.sel = null;
+    if (V2.conns !== null && V2.sel && !list.some(c => c.id === V2.sel)) V2.sel = null;
     if (!V2.sel && list.length) V2.sel = list[0].id;
     const mgr = canManage();
     const rows = list.map(c => `<tr><td>${esc(c.name)}</td><td><code>${esc(c.base_url)}</code></td><td>${statusBadge(c.status)}</td><td>${c.last_test_at ? esc(new Date(c.last_test_at).toLocaleString()) : '—'}</td>
@@ -229,14 +232,32 @@
        <button class="primary">Create user</button></form>`;
   }
 
-  const inflight = {};
+  const queryKey = kind => ['ui', V2.user?.id, V2.ws, kind, ...(['cat', 'catall', 'reqs'].includes(kind) ? [V2.sel] : [])];
   function load(kind, path) {
-    if (V2[kind] !== null || inflight[kind]) return;
-    inflight[kind] = true;
-    api('GET', path).then(d => { V2[kind] = d; V2.error = ''; }, e => { V2[kind] = []; V2.error = e.message; })
-      .finally(() => { inflight[kind] = false; render(); });
+    if (V2[kind] !== null) return;
+    const scope = generation;
+    V2Query.fetch(queryKey(kind), '/api/v2' + path).then(d => {
+      if (scope !== generation) return;
+      V2[kind] = d; V2.error = ''; render();
+    }, e => {
+      if (scope !== generation) return;
+      if (e.status === 401) reset();
+      else { V2[kind] = []; V2.error = e.message; }
+      render();
+    });
   }
-  const invalidate = k => { V2[k] = null; };
+  const invalidate = kind => { V2Query.invalidate(['ui', V2.user?.id, V2.ws, kind]); V2[kind] = null; };
+  function pickConnection(id) {
+    generation++;
+    V2.sel = id; V2.cat = V2.catall = V2.reqs = V2.result = null;
+    V2.previewObject = ''; V2.filters = [];
+  }
+  function applyRoute() {
+    const route = V2Route.current();
+    S.page = { sources: 'v2src', workspaces: 'v2ws', members: 'v2members', audit: 'v2audit', users: 'v2users', account: 'v2account' }[route.page];
+    if (route.page === 'sources' && route.connection !== V2.sel) pickConnection(route.connection || null);
+  }
+  addEventListener('hashchange', () => { if (V2.enabled && V2.user) { applyRoute(); render(); } });
 
   // ---- events (delegated; no inline handlers) ----
   document.addEventListener('submit', async ev => {
@@ -290,7 +311,7 @@
       if (act === 'logout') { await api('POST', '/auth/logout', {}); reset(); S.page = 'sources'; V2.error = ''; }
       else if (act === 'pick') { setWs(el.dataset.id); }
       else if (act === 'remove') { await api('DELETE', `/workspaces/${V2.ws}/members/${el.dataset.id}`); invalidate('members'); S.notice = 'Member removed'; }
-      else if (act === 'pick-conn') { V2.sel = el.dataset.id; V2.cat = V2.catall = V2.reqs = V2.result = null; }
+      else if (act === 'pick-conn') { pickConnection(el.dataset.id); V2Route.go('sources', { connection: V2.sel }); }
       else if (act === 'cancel-req') { await api('POST', connUrl() + `/dataset-requests/${el.dataset.id}/cancel`); invalidate('reqs'); S.notice = 'Request cancelled'; }
       else if (act === 'copy') { try { await navigator.clipboard.writeText(el.dataset.text); S.notice = 'Copied'; } catch { S.notice = 'Copy failed: select the text manually'; } }
       else if (act === 'test-conn') { V2.sel = el.dataset.id; const t = await api('POST', connUrl() + '/test'); invalidate('conns'); S.notice = t.status === 'ok' ? 'Connection OK' : 'Test failed: ' + t.error; }
@@ -307,6 +328,7 @@
   });
 
   function setWs(id) {
+    generation++; V2Query.clear();
     V2.ws = id; V2.members = V2.audit = V2.conns = V2.cat = V2.catall = V2.reqs = V2.sel = V2.result = null;
     try { if (id) localStorage.setItem(KEY, id); } catch { /* optional convenience */ }
   }

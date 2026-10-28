@@ -76,8 +76,8 @@
 ### Task 4: ETL core (pure functions)
 **Files:** `backend/v2/etl.py`; Test `tests/v2/test_etl_types.py`.
 **Interfaces:** `extract_batches(conn, spec, *, budget) -> Iterator[pa.RecordBatch]` (uses `spice` Flight + limiter lease per read, honours cancel callback); `stage_batch(cur, run_id, fence, table, batch)` (COPY into run-scoped table `uetl_staging.r_<run>_<n>`); `quality_checks(cur, table, spec) -> list[Finding]` (row count > 0 unless allowed, not-null columns, duplicate key); `publish_generation(cur, run_id, fence) -> int`.
-- [ ] Failing tests with synthetic SPICE data: Decimal128(38,10), int64 max, uint64, NULL per type, timestamps with tz, out-of-range dates (ISO text as in the preview fix) round-trip exactly; 5 M rows via `generate_series` finishes with RSS growth < 300 MB (measure, record) and stops at budget with `error_code=budget_rows`; 2 GB/30 min budgets enforced by fakes.
-- [ ] Implement; type map documented in `docs/v2/13-etl-type-map.md`. Commit.
+- [x] Failing tests with synthetic SPICE data: Decimal128(38,10), int64 max, uint64, NULL per type, timestamps with tz, out-of-range dates (ISO text as in the preview fix) round-trip exactly; 5 M rows via `generate_series` finishes with RSS growth < 300 MB (measure, record) and stops at budget with `error_code=budget_rows`; 2 GB/30 min budgets enforced by fakes.
+- [x] Implement; type map documented in docs/v2/13-etl-type-map.md. Commit.
 
 ### Task 5: Worker, lease fencing, retry, cancel
 **Files:** `backend/v2/worker.py`, `reaper.py`; Test `tests/v2/test_worker_recovery.py`.

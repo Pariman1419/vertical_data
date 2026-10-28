@@ -8,6 +8,7 @@
   'use strict';
   const V2 = new Proxy({}, { get: (_, key) => V2Store.get(key), set: (_, key, value) => { V2Store.set({ [key]: value }); return true; } });
   let generation = 0, previewTable = null;
+  const requestForm = V2Forms.datasetRequest();
   const KEY = 'uetl.v2.workspace';
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const ROLES = ['viewer', 'author', 'reviewer', 'operator', 'admin'];
@@ -26,6 +27,7 @@
     if (!res.ok) {
       const e = new Error(data?.error?.message || 'Request failed');
       e.status = res.status; e.cid = data?.error?.correlation_id;
+      e.retryAfter = Number(res.headers.get('Retry-After')) || 1;
       throw e;
     }
     return data;
@@ -35,7 +37,7 @@
   const role = () => (V2.workspaces.find(w => w.id === V2.ws) || {}).role || '';
   const isSuper = () => V2.user?.platform_role === 'superadmin';
   const canManage = () => isSuper() || role() === 'admin';
-  const fail = e => { V2.error = e.message + (e.cid ? ` (ref ${e.cid.slice(0, 8)})` : ''); render(); };
+  const fail = e => { V2.error = V2Forms.errorMessage(e) + (e.cid ? ` (ref ${e.cid.slice(0, 8)})` : ''); render(); };
 
   async function boot() {
     try {
@@ -158,9 +160,19 @@
     const objs = Object.entries(V2.cat?.objects || {});
     if (!objs.length || (!isSuper() && !['author', 'operator', 'admin'].includes(role()))) return '';
     const r = V2.result;
+    const object = objs.some(([name]) => name === V2.previewObject) ? V2.previewObject : objs[0][0];
+    V2.previewObject = object;
+    const columns = V2.cat.objects[object].columns;
+    const filters = V2.filters.map((f, i) => `<div class="v2-filter" data-filter-row="${i}">
+      <label>Column<select data-filter="column" aria-label="Filter ${i + 1} column">${columns.map(c => `<option value="${esc(c.name)}" ${c.name === f.column ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
+      <label>Operator<select data-filter="op" aria-label="Filter ${i + 1} operator">${['=', '!=', '<', '<=', '>', '>='].map(op => `<option value="${esc(op)}" ${op === f.op ? 'selected' : ''}>${esc(op)}</option>`).join('')}</select></label>
+      <label>Value<input data-filter="value" aria-label="Filter ${i + 1} value" value="${esc(f.value)}" required maxlength="200"></label>
+      <button type="button" data-v2="remove-filter" data-index="${i}" aria-label="Remove filter ${i + 1}">Remove</button></div>`).join('');
     const table = r ? `<div class="card"><p class="muted">${r.rows.length} rows · ${r.columns.length} columns · first 20 columns shown. Choose Columns to change them.</p><div data-v2-table></div>${r.truncated ? '<p class="muted">Truncated at the preview limit.</p>' : ''}</div>` : '';
-    return `<div class="title">Preview</div><form class="card" data-v2-form="preview"><label class="field">Object<select name="object">${objs.map(([n]) => `<option>${esc(n)}</option>`).join('')}</select></label>
-      <label class="field">Rows (1–1000)<input name="limit" type="number" min="1" max="1000" value="50"></label><button class="primary">Run preview</button></form>` + table;
+    return `<div class="title">Preview</div><form class="card" data-v2-form="preview"><label class="field">Object<select name="object">${objs.map(([n]) => `<option ${n === object ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
+      <label class="field">Rows (1–1000)<input name="limit" type="number" min="1" max="1000" value="50"></label>
+      <fieldset><legend>Filters (all must match, up to 5)</legend>${filters}<button type="button" data-v2="add-filter" ${V2.filters.length >= 5 ? 'disabled' : ''}>Add filter</button></fieldset>
+      <button class="primary" ${V2.previewBusy ? 'disabled' : ''}>${V2.previewBusy ? 'Running preview…' : 'Run preview'}</button><span role="status">${V2.previewBusy ? ' Reading source…' : ''}</span></form>` + table;
   }
 
   const PROFILES = { pg: 'PostgreSQL (schema.table)', scada: 'SQL Server SCADA (Database.schema.table)' };
@@ -269,6 +281,9 @@
     ev.preventDefault();
     const f = Object.fromEntries(new FormData(form));
     const kind = form.dataset.v2Form;
+    if (kind === 'preview' && V2.previewBusy) return;
+    const scope = generation, target = connUrl();
+    const submitButton = form.querySelector('button.primary');
     V2.error = '';
     try {
       if (kind === 'login') {
@@ -283,13 +298,23 @@
         await api('POST', `/workspaces/${V2.ws}/connections`, { name: f.name, kind: 'rest', base_url: f.base_url });
         invalidate('conns'); S.notice = 'Connection added';
       } else if (kind === 'request') {
-        await api('POST', connUrl() + '/dataset-requests', { profile: f.profile, dataset_name: f.dataset_name, remote_object: f.remote_object, note: f.note || null });
+        const submitted = await V2Forms.submit(requestForm, async () => {
+          await V2Forms.validate(requestForm, f);
+          await api('POST', target + '/dataset-requests', { profile: f.profile, dataset_name: f.dataset_name, remote_object: f.remote_object, note: f.note || null });
+        });
+        if (!submitted || scope !== generation) return;
         invalidate('reqs'); S.notice = 'Request created';
       } else if (kind === 'allow') {
         await api('PUT', connUrl() + '/allowed-objects', { objects: new FormData(form).getAll('obj') });
         invalidate('cat'); invalidate('catall'); S.notice = 'Allowlist saved';
       } else if (kind === 'preview') {
-        V2.result = await api('POST', connUrl() + '/preview', { object: f.object, limit: Number(f.limit) || 50 });
+        V2.previewBusy = true;
+        if (submitButton) { submitButton.disabled = true; submitButton.textContent = 'Running preview…'; }
+        const columns = V2.cat.objects[f.object].columns;
+        await V2Forms.validate(V2Forms.previewFilters(columns), { filters: V2.filters });
+        const result = await api('POST', target + '/preview', { object: f.object, limit: Number(f.limit) || 50,
+          filters: V2Forms.filters(columns, V2.filters) });
+        if (scope === generation) V2.result = result;
       } else if (kind === 'member') {
         await api('POST', `/workspaces/${V2.ws}/members`, { username: f.username, role: f.role });
         invalidate('members'); S.notice = 'Member saved';
@@ -301,8 +326,9 @@
         await api('POST', '/users', { username: f.username, display_name: f.display_name || '', password: f.password });
         invalidate('users'); S.notice = 'User created';
       }
-      form.reset?.();
-    } catch (e) { V2.error = e.message + (e.cid ? ` (ref ${e.cid.slice(0, 8)})` : ''); }
+      if (kind !== 'preview') form.reset?.();
+    } catch (e) { if (scope === generation || kind === 'login') V2.error = V2Forms.errorMessage(e) + (e.cid ? ` (ref ${e.cid.slice(0, 8)})` : ''); }
+    if (kind === 'preview') V2.previewBusy = false;
     V2.busy = false; render();
   });
 
@@ -312,6 +338,8 @@
     const act = el.dataset.v2;
     try {
       if (act === 'logout') { await api('POST', '/auth/logout', {}); reset(); S.page = 'sources'; V2.error = ''; }
+      else if (act === 'add-filter') { const cols = V2.cat?.objects[V2.previewObject]?.columns || []; if (cols.length && V2.filters.length < 5) V2.filters = [...V2.filters, { column: cols[0].name, op: '=', value: '' }]; }
+      else if (act === 'remove-filter') { V2.filters = V2.filters.filter((_, i) => i !== Number(el.dataset.index)); }
       else if (act === 'pick') { setWs(el.dataset.id); }
       else if (act === 'remove') { await api('DELETE', `/workspaces/${V2.ws}/members/${el.dataset.id}`); invalidate('members'); S.notice = 'Member removed'; }
       else if (act === 'pick-conn') { pickConnection(el.dataset.id); V2Route.go('sources', { connection: V2.sel }); }
@@ -326,8 +354,15 @@
   });
 
   document.addEventListener('change', ev => {
+    if (ev.target.matches('[data-v2-form="preview"] [name="object"]')) { V2.previewObject = ev.target.value; V2.filters = []; V2.result = null; render(); }
+    const filterRow = ev.target.closest('[data-filter-row]');
+    if (filterRow) V2.filters = V2.filters.map((f, i) => i === Number(filterRow.dataset.filterRow) ? { ...f, [ev.target.dataset.filter]: ev.target.value } : f);
     const sel = ev.target.closest('[data-v2-ws]');
     if (sel) { setWs(sel.value); render(); }
+  });
+  document.addEventListener('input', ev => {
+    const row = ev.target.closest('[data-filter-row]');
+    if (row && ev.target.dataset.filter === 'value') V2.filters = V2.filters.map((f, i) => i === Number(row.dataset.filterRow) ? { ...f, value: ev.target.value } : f);
   });
 
   function setWs(id) {

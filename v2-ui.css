@@ -30,3 +30,7 @@
 .v2-columns summary { cursor: pointer; font-weight: 600; padding: 8px 0; }
 .v2-column-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px 12px; max-height: 220px; overflow: auto; margin-top: 8px; }
 .v2-column-choices label { display: flex; gap: 8px; align-items: center; min-width: 0; overflow-wrap: anywhere; }
+.v2-filter { display: grid; grid-template-columns: minmax(130px, 1fr) 100px minmax(130px, 1fr) auto; gap: 12px; align-items: end; margin: 8px 0; }
+.v2-filter label { display: grid; gap: 4px; }
+.v2-filter input, .v2-filter select { width: 100%; min-width: 0; }
+@media (max-width: 700px) { .v2-filter { grid-template-columns: 1fr 1fr; } }

@@ -7,7 +7,7 @@
 (function () {
   'use strict';
   const V2 = new Proxy({}, { get: (_, key) => V2Store.get(key), set: (_, key, value) => { V2Store.set({ [key]: value }); return true; } });
-  let generation = 0;
+  let generation = 0, previewTable = null;
   const KEY = 'uetl.v2.workspace';
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const ROLES = ['viewer', 'author', 'reviewer', 'operator', 'admin'];
@@ -69,6 +69,7 @@
   navPage = p => (PAGES[p] ? p : baseNav(p));
   page = () => (PAGES[S.page] ? v2Page() : basePage());
   layout = function () {
+    previewTable?.destroy(); previewTable = null;
     const routePage = { v2src: 'sources', v2ws: 'workspaces', v2members: 'members', v2audit: 'audit', v2users: 'users', v2account: 'account' }[S.page];
     if (V2.user && routePage && V2Route.current().page !== routePage) V2Route.go(routePage);
     if (V2.enabled && V2.user) {
@@ -81,6 +82,8 @@
     if (!V2.checked) { shell.innerHTML = '<main class="main"><section class="content"><p class="muted">Loading…</p></section></main>'; return; }
     if (!V2.user) { shell.innerHTML = loginMarkup(); return; }
     decorate();
+    const tableHost = document.querySelector('[data-v2-table]');
+    if (tableHost && V2.result) previewTable = V2Table.mount(tableHost, V2.result);
   };
 
   function decorate() {
@@ -155,7 +158,7 @@
     const objs = Object.entries(V2.cat?.objects || {});
     if (!objs.length || (!isSuper() && !['author', 'operator', 'admin'].includes(role()))) return '';
     const r = V2.result;
-    const table = r ? `<div class="card tablewrap"><table class="table"><thead><tr>${r.columns.map(c => `<th>${esc(c.name)}<br><small class="muted">${esc(c.type)}</small></th>`).join('')}</tr></thead><tbody>${r.rows.map(row => `<tr>${row.map(v => `<td>${v === null ? '<span class="muted">null</span>' : esc(v)}</td>`).join('')}</tr>`).join('')}</tbody></table>${r.truncated ? '<p class="muted">Truncated at the preview limit.</p>' : ''}</div>` : '';
+    const table = r ? `<div class="card"><p class="muted">${r.rows.length} rows · ${r.columns.length} columns · first 20 columns shown. Choose Columns to change them.</p><div data-v2-table></div>${r.truncated ? '<p class="muted">Truncated at the preview limit.</p>' : ''}</div>` : '';
     return `<div class="title">Preview</div><form class="card" data-v2-form="preview"><label class="field">Object<select name="object">${objs.map(([n]) => `<option>${esc(n)}</option>`).join('')}</select></label>
       <label class="field">Rows (1–1000)<input name="limit" type="number" min="1" max="1000" value="50"></label><button class="primary">Run preview</button></form>` + table;
   }

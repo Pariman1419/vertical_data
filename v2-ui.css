@@ -15,3 +15,18 @@
 .v2-checks label { display: flex; gap: 8px; align-items: center; }
 
 .v2-yaml { background: rgba(127,127,127,.12); padding: 10px 12px; border-radius: 6px; overflow: auto; margin: 6px 0; font-size: 13px; }
+.v2-grid { position: relative; height: 480px; max-height: 65vh; width: 100%; overflow: auto; border: 1px solid var(--line, #dce3ee); border-radius: 8px; font-size: 13px; contain: layout paint; }
+.v2-grid:focus-visible { outline: 2px solid #203f70; outline-offset: 2px; }
+.v2-grid-canvas { position: relative; }
+.v2-grid-row, .v2-grid-header { position: absolute; left: 0; width: 100%; height: 34px; }
+.v2-cell { position: absolute; top: 0; width: 190px; height: 34px; padding: 7px 10px; box-sizing: border-box; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; background: #fff; border-bottom: 1px solid var(--line, #dce3ee); border-right: 1px solid var(--line, #dce3ee); }
+.v2-grid-header { height: 58px; z-index: 3; }
+.v2-header { height: 58px; background: #f2f5f9; display: grid; align-content: center; gap: 3px; }
+.v2-header button { background: none; border: 0; padding: 0; text-align: left; color: inherit; font-weight: 600; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.v2-header small { overflow: hidden; text-overflow: ellipsis; }
+.v2-frozen { z-index: 2; border-right: 2px solid var(--line, #dce3ee); }
+.v2-header.v2-frozen { z-index: 4; }
+.v2-columns { margin: 8px 0 12px; }
+.v2-columns summary { cursor: pointer; font-weight: 600; padding: 8px 0; }
+.v2-column-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px 12px; max-height: 220px; overflow: auto; margin-top: 8px; }
+.v2-column-choices label { display: flex; gap: 8px; align-items: center; min-width: 0; overflow-wrap: anywhere; }

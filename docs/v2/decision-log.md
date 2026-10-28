@@ -50,3 +50,11 @@ Gate 0 approved by owner on 2026-10-27 ("approve ตาม proposal"). Entries b
 | Redis / worker hosting (test phase) | **Docker Compose: api + worker + redis in one stack** | Replaces the WSL Redis (no autostart) for tests; WSL Redis stays only as a fallback |
 | ETL test data | **Synthetic data on SPICE (`generate_series`) + `_mock` tables only** | No real/SCADA tables in Phase 3 tests |
 | Publish mechanism | **Table per generation + a view pointing at the latest generation**, swapped in one transaction | Retention of old generations: N to be decided |
+
+## 2026-10-28 — Owner decisions for Phase 3 (grill-me round 2)
+| Decision | Choice | Notes |
+|---|---|---|
+| Generation retention | Keep **3** generations per dataset (current + 2 rollbacks) | Older generations dropped after a successful publish |
+| Per-run resource budget (defaults) | **5 M rows / 2 GB staging / 30 min** | Exceeding stops the run and reports; to be adjustable later only with an audited permission |
+| Who may retry/cancel a run | **Not the run owner by right: only workspace operator/admin** (existing `run.submit/cancel/retry` in operator role) | Every action audited; unauthorized attempts rejected and tested |
+| Dead-letter alerting (test phase) | **Shown on the Jobs page** (red banner + count); nothing sent outside the system | Email/webhook deferred; would need separate approval (external data egress) |

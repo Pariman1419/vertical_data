@@ -38,3 +38,29 @@
 @media (max-width: 800px) { .v2-activity-filters { grid-template-columns: 1fr 1fr; } }
 .v2-filter input, .v2-filter select { width: 100%; min-width: 0; }
 @media (max-width: 700px) { .v2-filter { grid-template-columns: 1fr 1fr; } }
+
+/* Jobs UI & Dead-letter banner (Phase 3 Task 8) */
+.v2-jobs-container { display: flex; flex-direction: column; gap: 12px; }
+.v2-dead-letter-banner { background: #ffebee; border: 1px solid #ef5350; border-left: 6px solid #d32f2f; color: #b71c1c; padding: 12px 16px; border-radius: 8px; display: flex; flex-direction: column; gap: 4px; }
+.v2-dead-letter-banner .dl-title { font-weight: 700; font-size: 14px; }
+.v2-dead-letter-banner .dl-desc { font-size: 13px; color: #5f1010; }
+.v2-progress-bar { width: 120px; height: 6px; background: #e0e6ed; border-radius: 3px; overflow: hidden; margin-bottom: 2px; }
+.v2-progress-fill { height: 100%; background: #1976d2; border-radius: 3px; transition: width 0.3s ease; }
+.v2-badge-queued { background: #eceff1; color: #455a64; }
+.v2-badge-running { background: #e3f2fd; color: #1565c0; animation: v2-pulse 2s infinite; }
+.v2-badge-publishing { background: #f3e5f5; color: #7b1fa2; animation: v2-pulse 2s infinite; }
+.v2-badge-succeeded { background: #e8f5e9; color: #2e7d32; }
+.v2-badge-failed { background: #ffebee; color: #c62828; }
+.v2-badge-cancelled { background: #fff8e1; color: #f57f17; }
+.v2-badge-dead { background: #263238; color: #ff8a80; }
+
+@keyframes v2-pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v2-badge-running, .v2-badge-publishing { animation: none !important; }
+  .v2-progress-fill { transition: none !important; }
+}

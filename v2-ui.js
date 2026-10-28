@@ -7,13 +7,13 @@
 (function () {
   'use strict';
   const V2 = new Proxy({}, { get: (_, key) => V2Store.get(key), set: (_, key, value) => { V2Store.set({ [key]: value }); return true; } });
-  let generation = 0, previewTable = null, activityView = null;
+  let generation = 0, previewTable = null, activityView = null, jobsView = null;
   const resourceVersions = {};
   const requestForm = V2Forms.datasetRequest();
   const KEY = 'uetl.v2.workspace';
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const ROLES = ['viewer', 'author', 'reviewer', 'operator', 'admin'];
-  const PAGES = { v2ws: 'Workspaces', v2src: 'Sources (SPICE)', v2members: 'Members', v2audit: 'Audit trail', v2users: 'Users', v2account: 'Account', v2activity: 'Source activity' };
+  const PAGES = { v2ws: 'Workspaces', v2src: 'Sources (SPICE)', v2jobs: 'Jobs', v2members: 'Members', v2audit: 'Audit trail', v2users: 'Users', v2account: 'Account', v2activity: 'Source activity' };
 
   async function api(method, path, body) {
     const scope = generation;
@@ -64,7 +64,7 @@
   let PAGES_ADDED = false;
   function addMenu() {
     PAGES_ADDED = true;
-    M.push(['v2ws', PAGES.v2ws], ['v2src', PAGES.v2src], ['v2members', PAGES.v2members], ['v2audit', PAGES.v2audit], ['v2activity', PAGES.v2activity], ['v2account', PAGES.v2account]);
+    M.push(['v2ws', PAGES.v2ws], ['v2src', PAGES.v2src], ['v2jobs', PAGES.v2jobs], ['v2members', PAGES.v2members], ['v2audit', PAGES.v2audit], ['v2activity', PAGES.v2activity], ['v2account', PAGES.v2account]);
   }
   function syncMenu() {
     const has = M.some(x => x[0] === 'v2users');
@@ -79,7 +79,8 @@
   layout = function () {
     previewTable?.destroy(); previewTable = null;
     activityView?.destroy(); activityView = null;
-    const routePage = { v2src: 'sources', v2ws: 'workspaces', v2members: 'members', v2audit: 'audit', v2users: 'users', v2account: 'account', v2activity: 'source-activity' }[S.page];
+    jobsView?.destroy(); jobsView = null;
+    const routePage = { v2src: 'sources', v2ws: 'workspaces', v2jobs: 'jobs', v2members: 'members', v2audit: 'audit', v2users: 'users', v2account: 'account', v2activity: 'source-activity' }[S.page];
     if (V2.user && routePage && V2Route.current().page !== routePage) V2Route.go(routePage);
     if (V2.enabled && V2.user) {
       if (!V2.workspaces.some(w => w.id === V2.ws)) setWs(V2.workspaces[0]?.id || null); // keep selector and state in step
@@ -95,6 +96,8 @@
     if (tableHost && V2.result) previewTable = V2Table.mount(tableHost, V2.result);
     const activityHost = document.querySelector('[data-v2-activity]');
     if (activityHost && V2.ws) activityView = V2Activity.mount(activityHost, { workspace: V2.ws, query: V2Query, onUnauthorized: () => { reset(); render(); } });
+    const jobsHost = document.querySelector('[data-v2-jobs]');
+    if (jobsHost && V2.ws) jobsView = V2Jobs.mount(jobsHost, { workspace: V2.ws, query: V2Query, role: V2.role, onUnauthorized: () => { reset(); render(); } });
   };
 
   function decorate() {
@@ -131,6 +134,7 @@
     if (p === 'v2src') return srcPage();
     if (p === 'v2members') return membersPage();
     if (p === 'v2audit') return auditPage();
+    if (p === 'v2jobs') return intro('Jobs', 'Pipeline executions, worker leases, progress and dead letters.') + '<div data-v2-jobs></div>';
     if (p === 'v2activity') return intro('Source activity', 'Queue waits, busy replies and preview outcomes. No query text or source values are logged.') + '<div data-v2-activity></div>';
     return usersPage();
   }
@@ -279,7 +283,7 @@
   }
   function applyRoute() {
     const route = V2Route.current();
-    S.page = { sources: 'v2src', workspaces: 'v2ws', members: 'v2members', audit: 'v2audit', users: 'v2users', account: 'v2account', 'source-activity': 'v2activity' }[route.page];
+    S.page = { sources: 'v2src', workspaces: 'v2ws', jobs: 'v2jobs', members: 'v2members', audit: 'v2audit', users: 'v2users', account: 'v2account', 'source-activity': 'v2activity' }[route.page];
     if (route.page === 'sources' && route.connection !== V2.sel) pickConnection(route.connection || null);
   }
   addEventListener('hashchange', () => { if (V2.enabled && V2.user) { applyRoute(); render(); } });

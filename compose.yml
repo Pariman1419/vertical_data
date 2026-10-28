@@ -1,5 +1,5 @@
-# Docker Desktop 29.9.2 / Compose v5.6.1 on the dev machine; see docs/v2/implementation-log.md for what was run. PostgreSQL is the EXISTING shared server; nothing here creates a database.
-# Secrets come from the git-ignored .env / Docker secrets, never from this file.
+# Docker Compose configuration for U-ETL v2 API, Dramatiq Worker, and Redis broker.
+# Secrets come from the git-ignored .env / environment variables, never committed.
 services:
   api:
     build: { context: ., dockerfile: backend/Dockerfile.v2 }
@@ -8,16 +8,39 @@ services:
       UETL_COOKIE_SECURE: "${UETL_COOKIE_SECURE:-true}"
       UETL_REDIS_URL: "redis://:${UETL_REDIS_PASSWORD:?set UETL_REDIS_PASSWORD}@redis:6379/0"   # overrides the host-local URL in .env
     ports: ["127.0.0.1:8443:8443"]      # loopback only; put a TLS reverse proxy in front for shared use
-    depends_on: [redis]
+    depends_on:
+      redis:
+        condition: service_healthy
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     restart: unless-stopped
+
+  worker:
+    build: { context: ., dockerfile: backend/Dockerfile.v2 }
+    command: ["python", "-m", "dramatiq", "backend.v2.worker"]
+    env_file: .env
+    environment:
+      UETL_REDIS_URL: "redis://:${UETL_REDIS_PASSWORD:?set UETL_REDIS_PASSWORD}@redis:6379/0"
+    depends_on:
+      redis:
+        condition: service_healthy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
   redis:
-    image: redis:7.0
+    image: redis:7.0-alpine
     command: ["redis-server", "--appendonly", "yes", "--requirepass", "${UETL_REDIS_PASSWORD:?set UETL_REDIS_PASSWORD}", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${UETL_REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
     volumes: ["redis-data:/data"]
     expose: ["6379"]                     # internal network only, not published
     restart: unless-stopped
+
 volumes:
   redis-data: {}

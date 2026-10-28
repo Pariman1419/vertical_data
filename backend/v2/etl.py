@@ -152,15 +152,29 @@ def ensure_staging_table(cur, run_id: Any, fence: int, table: str, schema: pa.Sc
     if cur.fetchone():
         return
 
-    col_defs = []
-    for field in schema:
-        arr = batch[field.name] if batch is not None else None
-        pg_type = arrow_type_to_pg(field, arr)
-        col_defs.append(sql.SQL("{} {}").format(sql.Identifier(field.name), sql.SQL(pg_type)))
+    # Check if security-definer helper worker_create_staging_table exists (Migration 0008)
+    cur.execute("SELECT to_regproc('uetl_meta.worker_create_staging_table') IS NOT NULL")
+    has_helper = cur.fetchone()[0]
 
-    qualified = sql.Identifier(schema_name, table_name)
-    cur.execute(sql.SQL("CREATE TABLE IF NOT EXISTS {} ({})").format(qualified, sql.SQL(", ").join(col_defs)))
-    cur.execute(sql.SQL("GRANT SELECT, INSERT, UPDATE, DELETE ON {} TO uetl_app").format(qualified))
+    if has_helper:
+        col_parts = []
+        for field in schema:
+            arr = batch[field.name] if batch is not None else None
+            pg_type = arrow_type_to_pg(field, arr)
+            col_parts.append(f'"{field.name}" {pg_type}')
+        col_defs_str = ", ".join(col_parts)
+        cur.execute("SELECT uetl_meta.worker_create_staging_table(%s, %s, %s, %s)",
+                    (run_id, fence, table_name, col_defs_str))
+    else:
+        col_defs = []
+        for field in schema:
+            arr = batch[field.name] if batch is not None else None
+            pg_type = arrow_type_to_pg(field, arr)
+            col_defs.append(sql.SQL("{} {}").format(sql.Identifier(field.name), sql.SQL(pg_type)))
+
+        qualified = sql.Identifier(schema_name, table_name)
+        cur.execute(sql.SQL("CREATE TABLE IF NOT EXISTS {} ({})").format(qualified, sql.SQL(", ").join(col_defs)))
+        cur.execute(sql.SQL("GRANT SELECT, INSERT, UPDATE, DELETE ON {} TO uetl_app").format(qualified))
 
 
 def extract_batches(conn: dict, spec: dict, *, budget: Optional[Union[Budget, dict]] = None,
@@ -460,27 +474,36 @@ def publish_generation(cur, run_id: Any, fence: int, *, spec: Optional[dict] = N
     if "." in stg_name:
         stg_schema, stg_name = stg_name.split(".", 1)
 
-    # Move table to uetl_published and rename to target generation
-    cur.execute(sql.SQL("ALTER TABLE {} SET SCHEMA uetl_published").format(
-        sql.Identifier(stg_schema, stg_name)
-    ))
-    cur.execute(sql.SQL("ALTER TABLE {} RENAME TO {}").format(
-        sql.Identifier("uetl_published", stg_name),
-        sql.Identifier(gen_table)
-    ))
-
-    # Atomic view swap: DROP VIEW IF EXISTS followed by CREATE VIEW in the same transaction
-    # (PostgreSQL forbids CREATE OR REPLACE VIEW if columns are reordered, renamed, or retyped).
     view_ident = sql.Identifier("uetl_published", target_name)
     gen_ident = sql.Identifier("uetl_published", gen_table)
-    cur.execute(sql.SQL("DROP VIEW IF EXISTS {}").format(view_ident))
-    cur.execute(sql.SQL("CREATE VIEW {} AS SELECT * FROM {}").format(
-        view_ident, gen_ident
-    ))
 
-    # Grant select to uetl_app
-    cur.execute(sql.SQL("GRANT SELECT ON {} TO uetl_app").format(gen_ident))
-    cur.execute(sql.SQL("GRANT SELECT ON {} TO uetl_app").format(view_ident))
+    # Move table to uetl_published and swap view atomically
+    cur.execute("SELECT to_regproc('uetl_meta.worker_publish_generation') IS NOT NULL")
+    has_publish_helper = cur.fetchone()[0]
+
+    if has_publish_helper:
+        cur.execute("SELECT uetl_meta.worker_publish_generation(%s, %s, %s, %s, %s)",
+                    (run_id, fence, target_name, stg_name, gen_table))
+    else:
+        # Move table to uetl_published and rename to target generation
+        cur.execute(sql.SQL("ALTER TABLE {} SET SCHEMA uetl_published").format(
+            sql.Identifier(stg_schema, stg_name)
+        ))
+        cur.execute(sql.SQL("ALTER TABLE {} RENAME TO {}").format(
+            sql.Identifier("uetl_published", stg_name),
+            sql.Identifier(gen_table)
+        ))
+
+        # Atomic view swap: DROP VIEW IF EXISTS followed by CREATE VIEW in the same transaction
+        # (PostgreSQL forbids CREATE OR REPLACE VIEW if columns are reordered, renamed, or retyped).
+        cur.execute(sql.SQL("DROP VIEW IF EXISTS {}").format(view_ident))
+        cur.execute(sql.SQL("CREATE VIEW {} AS SELECT * FROM {}").format(
+            view_ident, gen_ident
+        ))
+
+        # Grant select to uetl_app
+        cur.execute(sql.SQL("GRANT SELECT ON {} TO uetl_app").format(gen_ident))
+        cur.execute(sql.SQL("GRANT SELECT ON {} TO uetl_app").format(view_ident))
 
     # Record row count
     cur.execute(sql.SQL("SELECT COUNT(*) FROM {}").format(gen_ident))
@@ -506,6 +529,9 @@ def publish_generation(cur, run_id: Any, fence: int, *, spec: Optional[dict] = N
     )
 
     # Retention: keep current + 2 previous generations (total 3), prune older
+    cur.execute("SELECT to_regproc('uetl_meta.worker_drop_published_table') IS NOT NULL")
+    has_drop_helper = cur.fetchone()[0]
+
     cur.execute(
         """SELECT generation, table_name FROM dataset_generation
            WHERE dataset_id = %s AND dropped_at IS NULL
@@ -515,9 +541,12 @@ def publish_generation(cur, run_id: Any, fence: int, *, spec: Optional[dict] = N
     old_gens = cur.fetchall()
     for old_gen, old_tbl in old_gens:
         if old_tbl and SAFE_IDENT_RE.match(old_tbl):
-            cur.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(
-                sql.Identifier("uetl_published", old_tbl)
-            ))
+            if has_drop_helper:
+                cur.execute("SELECT uetl_meta.worker_drop_published_table(%s, %s, %s)", (run_id, fence, old_tbl))
+            else:
+                cur.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(
+                    sql.Identifier("uetl_published", old_tbl)
+                ))
         cur.execute(
             "UPDATE dataset_generation SET dropped_at = clock_timestamp() WHERE dataset_id = %s AND generation = %s",
             (dataset_id, old_gen)

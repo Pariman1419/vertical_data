@@ -38,7 +38,7 @@ live = pytest.mark.skipif(not _live_spice(), reason="SPICE host not reachable")
 
 @pytest.fixture()
 def db():
-    """Provides a connection with 0007 schema applied in a single transaction that is always rolled back."""
+    """Provides a connection with 0007 and 0008 schemas applied in a single transaction that is always rolled back."""
     try:
         c = migrate.connect()
     except Exception as ex:  # pragma: no cover
@@ -48,6 +48,9 @@ def db():
     cr.execute("SELECT 1 FROM information_schema.tables WHERE table_schema='uetl_meta' AND table_name='dead_letter'")
     if not cr.fetchone():
         cr.execute((MIG / "0007_run_worker.up.sql").read_text())
+    cr.execute("SELECT to_regproc('uetl_meta.worker_create_staging_table') IS NOT NULL")
+    if not cr.fetchone()[0]:
+        cr.execute((MIG / "0008_worker_ddl.up.sql").read_text())
     yield c, cr
     c.rollback()
     c.close()
@@ -474,4 +477,59 @@ def test_limiter_heartbeat_renews_lease_past_ttl():
     with limiter._transaction() as cur:
         cur.execute("SELECT count(*) FROM source_lease WHERE id=%s", (lid,))
         assert cur.fetchone()[0] == 0
+
+
+def test_worker_ddl_security_definer_functions(db, run_fixture):
+    """Verify 0008 SECURITY DEFINER helper functions exist, are owned by migrator,
+    are granted to uetl_app, and successfully perform DDL guarded by fence checks."""
+    c, cr = db
+    run_id = run_fixture["run_id"]
+    fence = run_fixture["fence"]
+    stg_tbl = etl.staging_table_name(run_id, 1)
+
+    batch = pa.record_batch([pa.array([10, 20, 30])], names=["score"])
+    etl.stage_batch(cr, run_id, fence, stg_tbl, batch)
+
+    # 1. Verify functions have SECURITY DEFINER (prosecdef = true)
+    cr.execute("""
+        SELECT proname, prosecdef
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'uetl_meta'
+          AND proname IN ('worker_create_staging_table', 'worker_publish_generation', 'worker_drop_published_table')
+    """)
+    rows = dict(cr.fetchall())
+    assert rows.get("worker_create_staging_table") is True
+    assert rows.get("worker_publish_generation") is True
+    assert rows.get("worker_drop_published_table") is True
+
+    # 2. Verify EXECUTE is granted to uetl_app
+    cr.execute("""
+        SELECT routine_name
+        FROM information_schema.routine_privileges
+        WHERE routine_schema = 'uetl_meta'
+          AND grantee = 'uetl_app'
+          AND privilege_type = 'EXECUTE'
+    """)
+    granted = {r[0] for r in cr.fetchall()}
+    assert "worker_create_staging_table" in granted
+    assert "worker_publish_generation" in granted
+    assert "worker_drop_published_table" in granted
+
+    # 3. Call helper functions to create staging table and publish generation
+    test_tbl = etl.staging_table_name(run_id, 2)
+    schema = pa.schema([pa.field("x", pa.int32())])
+    etl.ensure_staging_table(cr, run_id, fence, test_tbl, schema)
+
+    target_name = "test_app_publish_ds"
+    gen = etl.publish_generation(cr, run_id, fence, spec={"target_name": target_name}, staging_table=stg_tbl)
+    assert gen >= 1
+
+    cr.execute(f"SELECT COUNT(*) FROM uetl_published.{target_name}")
+    assert cr.fetchone()[0] == 3
+
+    # 4. Fence failure rejection
+    with pytest.raises(Exception) as exc_info:
+        etl.ensure_staging_table(cr, run_id, fence + 999, etl.staging_table_name(run_id, 3), schema)
+    assert "stale" in str(exc_info.value).lower() or "42501" in str(exc_info.value)
 

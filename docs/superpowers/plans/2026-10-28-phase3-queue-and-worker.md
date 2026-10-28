@@ -63,7 +63,8 @@
 - [ ] Experiments, each with a recorded result: (a) kill -9 worker mid-job -> message redelivered?; (b) duplicate delivery -> PG fence makes second a no-op; (c) Redis restart with AOF -> messages kept?; (d) Redis flushed -> reaper re-enqueues from PG; (e) visibility timeout vs a 5-minute job (heartbeat extends?); (f) memory of a worker streaming 5 M synthetic rows.
 - [ ] Decision gate: if (a)-(d) cannot be made correct with PG as authority, write the result and STOP; owner chooses between "custom Redis list + PG lease" and another library. Otherwise record "Dramatiq confirmed". Commit doc only (spike code removed or kept clearly labelled).
 
-### Task 3: Run schema and DB guards (migration 0006 part B)
+### Task 3: Run schema and DB guards (migration `0007_run_worker`)
+> **Correction (2026-10-28, Claude took over as writer; Codex out of tokens):** migration 0002 already provides `pipeline_revision` (with approval states), `approval_decision`, `dataset`, `dataset_generation`, `job_run`, `job_attempt`, `job_event`. 0006 is `activity`. Task 3 is therefore the **additive 0007**: fence/lease/budget columns on `job_run`, `claim_run` / `heartbeat_run` / `run_fence_check` functions, approved-revision + workspace insert guard, state machine, one-generation-per-run unique index, append-only `job_event`, `dead_letter`. Tests: `tests/v2/test_run_schema.py` (applied and rolled back in one transaction; not applied to the shared DB). Task 4+ names below that say `run` mean `job_run`.
 **Files:** `backend/migrations/0006_runs.*`; Test `tests/v2/test_db_guards.py` additions.
 **Interfaces (tables):**
 - `pipeline_revision(id, workspace_id, connection_id, name, spec jsonb, spec_sha256, approved_at, approved_by, created_by)` — **Phase 3 minimal spec** `{dataset, columns[], filters[], target_name}`; immutable once `approved_at` set (trigger); Phase 4 extends `spec`. Phase 3 test fixtures insert approved revisions directly (labelled).

@@ -117,3 +117,8 @@
 
 ## 2026-10-27 — Gate 2 self-review finding [fixed, TESTED]
 - A `secret_ref` accepted any env-style name, and the SPICE client resolved it through `config.get`, so a workspace admin could register `UETL_APP_PASSWORD` (or any process env var) as a "token" and have it sent as a Bearer header to the allow-listed SPICE host. Fix: secret names must match `^SPICE_[A-Z0-9_]{1,55}$` at creation and the client refuses to resolve anything else. Tests added (72 passed).
+
+## 2026-10-28 — Phase 3 Task 3 (Claude, took over writing; Codex out of tokens)
+- Added `0007_run_worker` (up/down): job_run worker columns (fence, lease owner/heartbeat, attempt/max_attempts, backoff, rows/bytes counters, budgets 5 M rows / 2 GB / 1800 s, error_code), `guard_job_run` (approved revision in same workspace, state machine, terminal states, fence monotonic), `claim_run`, `heartbeat_run`, `run_fence_check`, unique generation per run, append-only `job_event`, `dead_letter`.
+- Evidence **TESTED LIVE (rolled back)**: `tests/v2/test_run_schema.py`, 7 tests; applied + reverted + re-applied inside one transaction as `uetl_migrator`, nothing persisted (shared DB verified: no `fence` column, no `dead_letter`). Negative control: weakening the fence check made the takeover test fail.
+- NOT applied to the shared DB; applying 0006 and 0007 needs owner approval. Not tested: concurrent claims from two real connections (Task 5), role-switched permission checks as `uetl_app`.

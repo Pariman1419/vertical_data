@@ -24,7 +24,7 @@
       else if (/^bool/.test(type)) { if (!/^(true|false)$/i.test(value)) fail(); }
       else if (/^timestamp/.test(type)) { if (!/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(value) || !Number.isFinite(Date.parse(value))) fail(); }
       else if (/^date/.test(type)) { if (!matches(/^\d{4}-\d{2}-\d{2}$/, value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0, 10) !== value) fail(); }
-      else if (['utf8', 'largeutf8', 'utf8view'].includes(type)) { if (Array.from(value).length > 200 || value.includes('\0')) fail(); }
+      else if (['utf8', 'largeutf8', 'utf8view'].includes(type)) { if (Array.from(value).length > 200 || value.includes('\0') || value.includes('\\')) fail(); }
       else fail();
       return { column: f.column, op: f.op, value };
     });

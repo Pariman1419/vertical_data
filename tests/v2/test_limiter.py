@@ -87,3 +87,49 @@ def test_cleanup_busy_preserves_source_outcome(monkeypatch, source_error):
             assert result == "success"
     finally:
         if lid: release(lid)
+
+
+def test_full_spice_pool_waits_two_seconds_before_busy(leases):
+    for _ in range(limiter.CAPS['spice']):
+        leases('spice')
+    start = time.monotonic()
+    with pytest.raises(limiter.Busy) as error:
+        limiter.acquire('spice')
+    elapsed = time.monotonic() - start
+    assert 1.9 <= elapsed < 3.0
+    assert error.value.retry_after >= 1
+
+
+def test_waiter_succeeds_when_slot_is_released_after_half_second(leases):
+    held = [leases('spice') for _ in range(limiter.CAPS['spice'])]
+    timer = threading.Timer(0.5, limiter.release, args=(held[0],))
+    timer.start()
+    start = time.monotonic()
+    try:
+        assert leases('spice')
+        assert 0.4 <= time.monotonic() - start < 1.5
+    finally:
+        timer.join()
+
+
+def test_zero_wait_preserves_nonblocking_acquisition(leases):
+    leases('odbc')
+    start = time.monotonic()
+    with pytest.raises(limiter.Busy):
+        limiter.acquire('odbc', wait_s=0)
+    assert time.monotonic() - start < 0.5
+
+
+def test_wait_default_uses_environment(monkeypatch, leases):
+    monkeypatch.setenv('UETL_LIMITER_WAIT_S', '0.2')
+    leases('odbc')
+    start = time.monotonic()
+    with pytest.raises(limiter.Busy):
+        limiter.acquire('odbc')
+    assert 0.15 <= time.monotonic() - start < 0.8
+
+
+@pytest.mark.parametrize('wait_s', [-1, float('nan'), float('inf'), True])
+def test_invalid_wait_rejected(wait_s):
+    with pytest.raises(ValueError):
+        limiter.acquire('spice', wait_s=wait_s)

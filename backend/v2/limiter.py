@@ -1,7 +1,9 @@
 """Cross-process source capacity. A crashed caller loses its slot after the TTL."""
 import logging
 import math
+import random
 import threading
+import time
 from contextlib import contextmanager
 
 import psycopg2
@@ -50,14 +52,34 @@ def _transaction():
         pool.putconn(conn)
 
 
-def acquire(pool: str, ttl_s: int = 30):
+def acquire(pool: str, ttl_s: int = 30, wait_s: float | None = None):
     if pool not in CAPS:
         raise ValueError("Unknown source pool")
     if type(ttl_s) is not int or ttl_s < 1:
         raise ValueError("TTL must be a positive integer")
+    if wait_s is None:
+        wait_s = float(config.get('UETL_LIMITER_WAIT_S', '2.0'))
+    if type(wait_s) not in (int, float) or not math.isfinite(wait_s) or wait_s < 0:
+        raise ValueError('Wait must be a finite nonnegative number')
+    deadline = time.monotonic() + wait_s
+    while True:
+        try:
+            return _acquire_once(pool, ttl_s)
+        except Busy:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(remaining, random.uniform(0.05, 0.1)))
+            if time.monotonic() >= deadline:
+                raise
+
+
+def _acquire_once(pool, ttl_s):
     with _transaction() as cur:
         # Namespace the lock to avoid colliding with unrelated users of the shared DB.
-        cur.execute("select pg_advisory_xact_lock(197004, hashtext(%s))", (pool,))
+        cur.execute("select pg_try_advisory_xact_lock(197004, hashtext(%s))", (pool,))
+        if not cur.fetchone()[0]:
+            raise Busy()
         cur.execute("delete from source_lease where pool=%s and expires_at <= clock_timestamp()", (pool,))
         cur.execute("select count(*), extract(epoch from min(expires_at)-clock_timestamp())"
                     " from source_lease where pool=%s", (pool,))

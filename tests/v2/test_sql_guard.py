@@ -10,7 +10,7 @@ from backend.v2 import spice
 def test_generated_sql_always_has_the_expected_shape():
     rng = random.Random(1)
     corpus = ["x'; DROP TABLE t; --", "/* UNION */", "\x00", "a\nb", "ไทย", "a" * 10000,
-              "0012", "-12", "1.5", "NaN", "1e999999999", "2026-10-27", True, "o'brien"]
+              "0012", "-12", "1.5", "NaN", "1e999999999", "2026-10-27", True, "o'brien", "\\", "x\\'; DROP TABLE t; --"]
     for _ in range(2000):
         obj = rng.choice(["t", "s.t", "d.s.t", "DROP"])
         types = {"a": rng.choice(["Utf8", "Int64", "Decimal128(38,10)", "Boolean", "Date32"]), "b": "Utf8"}
@@ -46,3 +46,11 @@ def test_guard_accepts_keywords_and_punctuation_inside_literals():
 def test_build_select_checks_column_identifiers():
     with pytest.raises(ValueError):
         spice.build_select("t", {"select": ['a" FROM "evil'], "types": {'a" FROM "evil': "Utf8"}}, [], 1)
+
+
+@pytest.mark.parametrize('col_type', ['Utf8', 'LargeUtf8', 'Utf8View'])
+@pytest.mark.parametrize('value', ['\\', 'a\\b', "x\\'; DROP TABLE t; --"])
+def test_string_literals_reject_backslash(col_type, value):
+    with pytest.raises(ValueError):
+        spice.build_select('t', {'select': [], 'types': {'a': col_type}},
+                           [{'column': 'a', 'op': '=', 'value': value}], 1)

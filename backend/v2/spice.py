@@ -158,7 +158,7 @@ def literal(col_type, value):
         return "TIMESTAMP '" + datetime.datetime.fromisoformat(str(value)).replace(tzinfo=None).isoformat(" ") + "'"
     if t in ("utf8", "largeutf8", "utf8view"):
         s = str(value)
-        if len(s) > 200 or "\x00" in s:
+        if len(s) > 200 or "\x00" in s or "\\" in s:
             raise ValueError("bad string")
         return "'" + s.replace("'", "''") + "'"
     raise ValueError("column type not filterable")

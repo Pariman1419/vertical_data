@@ -42,3 +42,13 @@ test('FormApi validation actually rejects bad request and filter values', async 
   await assert.rejects(forms.validate(forms.previewFilters([{ name: 'id', type: 'Int64' }]),
     { filters: [{ column: 'id', op: '=', value: '1.5' }] }));
 });
+test('string filters reject backslashes in the parser and FormApi validation', async () => {
+  for (const type of ['Utf8', 'LargeUtf8', 'Utf8View']) {
+    const columns = [{ name: 'text', type }];
+    for (const value of ['\\', 'a\\b', "x\\'; DROP TABLE t; --"]) {
+      const filters = [{ column: 'text', op: '=', value }];
+      assert.throws(() => forms.filters(columns, filters));
+      await assert.rejects(forms.validate(forms.previewFilters(columns), { filters }));
+    }
+  }
+});

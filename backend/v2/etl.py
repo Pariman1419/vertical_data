@@ -522,12 +522,6 @@ def publish_generation(cur, run_id: Any, fence: int, *, spec: Optional[dict] = N
         (next_gen, dataset_id)
     )
 
-    # Update run state to succeeded
-    cur.execute(
-        "UPDATE job_run SET state = 'succeeded', rows_read = %s WHERE id = %s AND fence = %s",
-        (row_count, run_id, fence)
-    )
-
     # Retention: keep current + 2 previous generations (total 3), prune older
     cur.execute("SELECT to_regproc('uetl_meta.worker_drop_published_table') IS NOT NULL")
     has_drop_helper = cur.fetchone()[0]
@@ -551,5 +545,11 @@ def publish_generation(cur, run_id: Any, fence: int, *, spec: Optional[dict] = N
             "UPDATE dataset_generation SET dropped_at = clock_timestamp() WHERE dataset_id = %s AND generation = %s",
             (dataset_id, old_gen)
         )
+
+    # Update run state to succeeded
+    cur.execute(
+        "UPDATE job_run SET state = 'succeeded', rows_read = %s WHERE id = %s AND fence = %s",
+        (row_count, run_id, fence)
+    )
 
     return next_gen

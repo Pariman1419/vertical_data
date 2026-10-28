@@ -38,6 +38,7 @@ Final validation: 166 whole-project Python tests, 25 UI tests and 39 pilot tests
 | Format out-of-Python-range Arrow dates using Arrow ISO text | Controlled regression reproduced the overflow; live diagnostic later confirmed two date32 columns | Extended ISO years may be displayed |
 | Treat catalog revision as the identity for learning publication | Prevent an old read from disabling LIMIT on a refreshed/replaced source | Refresh during learning may require a new probe on the next request |
 | Make cleanup failure use TTL fallback | Source result/error must survive a saturated cleanup pool | The slot can remain busy until its 30 s expiry |
+| Stop immediately when a batch exactly fills the row budget | A regression reproduced an unnecessary next read surfacing a late transport error | A result exactly at the cap is conservatively marked truncated |
 
 ## Review areas deliberately left open
 

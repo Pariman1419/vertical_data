@@ -138,8 +138,14 @@ def literal(col_type, value):
     if t.startswith(("int", "uint")):
         return str(int(str(value), 10))
     if t.startswith(("decimal", "float")):
-        d = decimal.Decimal(str(value))
-        if not d.is_finite():
+        text = str(value)
+        if len(text) > 200:
+            raise ValueError("number too long")
+        try:
+            d = decimal.Decimal(text)
+        except decimal.InvalidOperation:
+            raise ValueError("bad number") from None
+        if not d.is_finite() or abs(d.adjusted()) > 1000 or abs(d.as_tuple().exponent) > 1000:
             raise ValueError("not finite")
         return format(d, "f")
     if t.startswith("bool"):
@@ -165,7 +171,25 @@ def build_select(obj, columns, filters, limit):
     if filters:
         parts = [f'"{f["column"]}" {OPS[f["op"]]} {literal(columns["types"][f["column"]], f["value"])}' for f in filters]
         where = " WHERE " + " AND ".join(parts)
-    return f"SELECT {sel} FROM {quote(obj)}{where}" + (f" LIMIT {int(limit)}" if limit else "")
+    sql = f"SELECT {sel} FROM {quote(obj)}{where}" + (f" LIMIT {int(limit)}" if limit else "")
+    assert_select_shape(sql, obj, set(columns["types"]))
+    return sql
+
+
+def assert_select_shape(sql: str, allowed_object: str, allowed_columns: set[str]) -> None:
+    """Accept only the single-table grammar emitted by build_select, with opaque literals."""
+    # Only SQL-standard doubled apostrophes escape a quote. Unclosed literals fail the grammar.
+    stripped = re.sub(r"'(?:[^'\x00]|'')*'", "'value'", sql)
+    ident = r'"[A-Za-z0-9_]+"'
+    value = r"(?:-?[0-9]+(?:\.[0-9]+)?|true|false|(?:DATE |TIMESTAMP )?'value')"
+    condition = rf"{ident} (?:<>|<=|>=|=|<|>) {value}"
+    match = re.fullmatch(rf"SELECT (?P<cols>\*|{ident}(?:, {ident})*) FROM (?P<obj>{ident}(?:\.{ident}){{0,2}})"
+                         rf"(?: WHERE (?P<where>{condition}(?: AND {condition})*))?(?: LIMIT [1-9][0-9]*)?", stripped)
+    if not match or match["obj"] != quote(allowed_object):
+        raise ValueError("Unexpected SELECT shape")
+    identifiers = re.findall(ident, match["cols"] + " " + (match["where"] or ""))
+    if any(name[1:-1] not in allowed_columns for name in identifiers):
+        raise ValueError("Unknown column")
 
 
 # ---------- Flight ----------

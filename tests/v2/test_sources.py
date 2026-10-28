@@ -312,3 +312,91 @@ def test_arrow_dates_outside_python_range_keep_their_iso_text():
     values = pa.array([0, -719528], type=pa.int32()).cast(pa.date32())
     assert spice._arrow_jsonable(values, 0) == "1970-01-01"
     assert spice._arrow_jsonable(values, 1) == "0000-01-01"
+
+
+def test_row_budget_stops_at_exact_batch_boundary_without_another_read(monkeypatch):
+    import pyarrow as pa
+    import pyarrow.flight as fl
+    batch = pa.record_batch([pa.array([1, 2])], names=['id'])
+    class Reader:
+        schema = batch.schema
+        reads = 0
+        cancelled = False
+        def read_chunk(self):
+            self.reads += 1
+            if self.reads > 1: raise fl.FlightUnavailableError('end of stream after budget')
+            return type('Chunk', (), {'data': batch})()
+        def cancel(self): self.cancelled = True
+    reader = Reader()
+    class Client:
+        def __init__(self, *_): pass
+        def get_flight_info(self, *a):
+            return type('Info', (), {'endpoints': [type('Endpoint', (), {'ticket': None})()]})()
+        def do_get(self, *a): return reader
+        def close(self): pass
+    monkeypatch.setattr(fl, 'FlightClient', Client)
+    monkeypatch.setattr(spice, 'flight_endpoint', lambda _: ('127.0.0.1', 50051))
+    _, rows, truncated = spice.run_bounded(LIVE, 'SELECT 1', max_rows=2)
+    assert rows == [[1], [2]] and truncated
+    assert reader.reads == 1 and reader.cancelled
+
+
+def test_unlearned_spice_dataset_holds_cross_process_learning_lock(env, fake_catalog, monkeypatch):
+    from backend.v2 import db as database
+    c, url = fake_catalog
+    cid = url.split('/')[-1]
+    env.cur.execute("update catalog_snapshot set payload=jsonb_set(payload,'{objects,alarm,kind}','\"other\"') where connection_id=%s", (cid,))
+    observations = []
+    def read(_, sql, **kw):
+        pool = database._get_pool(); probe = pool.getconn()
+        try:
+            with probe.cursor() as cur:
+                cur.execute('select pg_try_advisory_xact_lock(197006,hashtext(%s)) as acquired', (cid + ':alarm',))
+                observations.append(cur.fetchone()['acquired'])
+        finally:
+            probe.rollback(); pool.putconn(probe)
+        if ' LIMIT ' in sql: raise spice.SpiceError('rejected')
+        return [], [], False
+    monkeypatch.setattr(spice, 'run_bounded', read)
+    assert c.post(url + '/preview', json={'object': 'alarm'}).status_code == 200
+    assert observations == [False, False]
+
+
+def test_limit_learning_cannot_overwrite_a_refreshed_source_identity(env, fake_catalog, monkeypatch):
+    c, url = fake_catalog
+    cid = url.split('/')[-1]
+    def read(_, sql, **kw):
+        if ' LIMIT ' in sql: raise spice.SpiceError('rejected')
+        env.cur.execute("insert into catalog_snapshot(connection_id,revision,payload) values (%s,2,%s)",
+            (cid, json.dumps({'objects': {'alarm': {'kind': 'postgres', 'columns': [{'name': 'id', 'type': 'Int64'}], 'limit_pushdown': None}}})))
+        return [], [], False
+    monkeypatch.setattr(spice, 'run_bounded', read)
+    assert c.post(url + '/preview', json={'object': 'alarm'}).status_code == 200
+    obj = c.get(url + '/catalog').json()['objects']['alarm']
+    assert obj['kind'] == 'postgres' and obj['limit_pushdown'] is None
+
+
+@pytest.mark.parametrize('policy', [None, True, False])
+def test_learning_contention_is_busy_but_known_limitless_reads_stay_concurrent(env, fake_catalog, monkeypatch, policy):
+    from backend.v2 import db as database
+    c, url = fake_catalog
+    cid = url.split('/')[-1]
+    env.cur.execute("update catalog_snapshot set payload=jsonb_set(jsonb_set(payload,'{objects,alarm,kind}','\"other\"'),'{objects,alarm,limit_pushdown}',%s) where connection_id=%s", (json.dumps(policy), cid))
+    calls = []
+    def read(_, sql, **kw):
+        calls.append(sql)
+        if ' LIMIT ' in sql: raise spice.SpiceError('rejected')
+        return [], [], False
+    monkeypatch.setattr(spice, 'run_bounded', read)
+    pool = database._get_pool(); blocker = pool.getconn()
+    try:
+        with blocker.cursor() as cur:
+            cur.execute('select pg_advisory_xact_lock(197006,hashtext(%s))', (cid + ':alarm',))
+        response = c.post(url + '/preview', json={'object': 'alarm'})
+        if policy is False:
+            assert response.status_code == 200 and len(calls) == 1
+        else:
+            assert response.status_code == 429 and response.headers['Retry-After'] == '1'
+            assert len(calls) == (1 if policy else 0)
+    finally:
+        blocker.rollback(); pool.putconn(blocker)

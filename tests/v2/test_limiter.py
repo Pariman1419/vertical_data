@@ -66,3 +66,24 @@ def test_unknown_pool_rejected():
 def test_invalid_ttl_rejected(ttl):
     with pytest.raises(ValueError):
         limiter.acquire("odbc", ttl)
+
+
+@pytest.mark.parametrize("source_error", [False, True])
+def test_cleanup_busy_preserves_source_outcome(monkeypatch, source_error):
+    from backend.v2.spice import SpiceError
+    release = limiter.release
+    lid = None
+    def busy(_): raise limiter.Busy()
+    monkeypatch.setattr(limiter, "release", busy)
+    try:
+        if source_error:
+            with pytest.raises(SpiceError) as ex:
+                with limiter.lease("odbc") as lid:
+                    raise SpiceError("timeout")
+            assert ex.value.code == "timeout"
+        else:
+            with limiter.lease("odbc") as lid:
+                result = "success"
+            assert result == "success"
+    finally:
+        if lid: release(lid)

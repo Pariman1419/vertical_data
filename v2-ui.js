@@ -8,6 +8,7 @@
   'use strict';
   const V2 = new Proxy({}, { get: (_, key) => V2Store.get(key), set: (_, key, value) => { V2Store.set({ [key]: value }); return true; } });
   let generation = 0, previewTable = null;
+  const resourceVersions = {};
   const requestForm = V2Forms.datasetRequest();
   const KEY = 'uetl.v2.workspace';
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -15,6 +16,7 @@
   const PAGES = { v2ws: 'Workspaces', v2src: 'Sources (SPICE)', v2members: 'Members', v2audit: 'Audit trail', v2users: 'Users', v2account: 'Account' };
 
   async function api(method, path, body) {
+    const scope = generation;
     const res = await fetch('/api/v2' + path, {
       method, credentials: 'same-origin', cache: 'no-store',
       headers: body === undefined ? { 'X-CSRF-Token': V2.csrf } : { 'Content-Type': 'application/json', 'X-CSRF-Token': V2.csrf },
@@ -23,7 +25,7 @@
     V2.enabled = V2.enabled || res.headers.has('x-correlation-id');
     let data = null;
     try { data = await res.json(); } catch { /* empty body */ }
-    if (res.status === 401 && V2.user) { reset(); render(); }
+    if (res.status === 401 && V2.user && scope === generation) { reset(); render(); }
     if (!res.ok) {
       const e = new Error(data?.error?.message || 'Request failed');
       e.status = res.status; e.cid = data?.error?.correlation_id;
@@ -33,15 +35,17 @@
     return data;
   }
 
-  function reset() { generation++; V2Query.clear(); Object.assign(V2, { user: null, csrf: '', workspaces: [], ws: null, members: null, audit: null, users: null, conns: null, catall: null, cat: null, reqs: null, sel: null, result: null, previewBusy: false }); }
+  function reset() { generation++; V2Query.clear(); Object.assign(V2, { user: null, csrf: '', workspaces: [], ws: null, members: null, audit: null, users: null, conns: null, catall: null, cat: null, reqs: null, sel: null, result: null, busy: false, previewBusy: false, previewObject: '', previewLimit: 50, filters: [], error: '' }); }
   const role = () => (V2.workspaces.find(w => w.id === V2.ws) || {}).role || '';
   const isSuper = () => V2.user?.platform_role === 'superadmin';
   const canManage = () => isSuper() || role() === 'admin';
   const fail = e => { V2.error = V2Forms.errorMessage(e) + (e.cid ? ` (ref ${e.cid.slice(0, 8)})` : ''); render(); };
 
   async function boot() {
+    const scope = generation;
     try {
       const me = await api('GET', '/auth/me');
+      if (scope !== generation) return;
       adopt(me);
     } catch { /* 401 = signed out, anything else = legacy server */ }
     V2.checked = true;
@@ -49,6 +53,8 @@
   }
 
   function adopt(me) {
+    generation++; V2Query.clear();
+    V2.previewObject = ''; V2.filters = []; V2.previewLimit = 50; V2.previewBusy = false;
     V2.user = me.user; V2.csrf = me.csrf; V2.workspaces = me.workspaces;
     let saved = null; try { saved = localStorage.getItem(KEY); } catch { /* storage may be blocked */ }
     V2.ws = V2.workspaces.some(w => w.id === saved) ? saved : (V2.workspaces[0]?.id || null);
@@ -250,18 +256,18 @@
   const queryKey = kind => ['ui', V2.user?.id, V2.ws, kind, ...(['cat', 'catall', 'reqs'].includes(kind) ? [V2.sel] : [])];
   function load(kind, path) {
     if (V2[kind] !== null) return;
-    const scope = generation;
+    const scope = generation, version = resourceVersions[kind] || 0;
     V2Query.fetch(queryKey(kind), '/api/v2' + path).then(d => {
-      if (scope !== generation) return;
+      if (scope !== generation || version !== (resourceVersions[kind] || 0)) return;
       V2[kind] = d; V2.error = ''; render();
     }, e => {
-      if (scope !== generation) return;
+      if (scope !== generation || version !== (resourceVersions[kind] || 0) || TanStack.isCancelledError(e)) return;
       if (e.status === 401) reset();
       else { V2[kind] = []; V2.error = e.message; }
       render();
     });
   }
-  const invalidate = kind => { V2Query.invalidate(['ui', V2.user?.id, V2.ws, kind]); V2[kind] = null; };
+  const invalidate = kind => { resourceVersions[kind] = (resourceVersions[kind] || 0) + 1; V2Query.invalidate(['ui', V2.user?.id, V2.ws, kind]); V2[kind] = null; };
   function pickConnection(id) {
     generation++;
     V2.sel = id; V2.cat = V2.catall = V2.reqs = V2.result = null;
@@ -281,54 +287,69 @@
     ev.preventDefault();
     const f = Object.fromEntries(new FormData(form));
     const kind = form.dataset.v2Form;
-    if (kind === 'preview' && V2.previewBusy) return;
-    const scope = generation, target = connUrl();
+    if ((kind === 'preview' && V2.previewBusy) || (kind === 'login' && V2.busy)) return;
+    let scope = generation;
+    const target = connUrl();
     const submitButton = form.querySelector('button.primary');
     V2.error = '';
     try {
       if (kind === 'login') {
         V2.busy = true; render();
-        adopt(await api('POST', '/auth/login', { username: f.username, password: f.password }).then(r => ({ ...r, workspaces: [] })));
-        adopt(await api('GET', '/auth/me'));
+        await api('POST', '/auth/login', { username: f.username, password: f.password });
+        if (scope !== generation) return;
+        const me = await api('GET', '/auth/me');
+        if (scope !== generation) return;
+        adopt(me); scope = generation;
         S.page = V2.workspaces.length ? 'v2src' : 'v2ws';
         if (V2.workspaces.length && location.hash.startsWith('#/')) applyRoute();
+        scope = generation;
       } else if (kind === 'workspace') {
         await api('POST', '/workspaces', { name: f.name, slug: f.slug });
-        const me = await api('GET', '/auth/me'); V2.workspaces = me.workspaces; S.notice = 'Workspace created';
+        if (scope !== generation) return;
+        const me = await api('GET', '/auth/me'); if (scope !== generation) return;
+        V2.workspaces = me.workspaces; S.notice = 'Workspace created';
       } else if (kind === 'conn') {
         await api('POST', `/workspaces/${V2.ws}/connections`, { name: f.name, kind: 'rest', base_url: f.base_url });
+        if (scope !== generation) return;
         invalidate('conns'); S.notice = 'Connection added';
       } else if (kind === 'request') {
         const submitted = await V2Forms.submit(requestForm, async () => {
           await V2Forms.validate(requestForm, f);
+          if (scope !== generation) return;
           await api('POST', target + '/dataset-requests', { profile: f.profile, dataset_name: f.dataset_name, remote_object: f.remote_object, note: f.note || null });
         });
         if (!submitted || scope !== generation) return;
         invalidate('reqs'); S.notice = 'Request created';
       } else if (kind === 'allow') {
-        await api('PUT', connUrl() + '/allowed-objects', { objects: new FormData(form).getAll('obj') });
+        await api('PUT', target + '/allowed-objects', { objects: new FormData(form).getAll('obj') });
+        if (scope !== generation) return;
         invalidate('cat'); invalidate('catall'); S.notice = 'Allowlist saved';
       } else if (kind === 'preview') {
         V2.previewBusy = true;
         if (submitButton) { submitButton.disabled = true; submitButton.textContent = 'Running preview…'; }
         const columns = V2.cat.objects[f.object].columns;
         await V2Forms.validate(V2Forms.previewFilters(columns), { filters: V2.filters });
+        if (scope !== generation) return;
         const result = await api('POST', target + '/preview', { object: f.object, limit: Number(f.limit) || 50,
           filters: V2Forms.filters(columns, V2.filters) });
         if (scope === generation) V2.result = result;
       } else if (kind === 'member') {
         await api('POST', `/workspaces/${V2.ws}/members`, { username: f.username, role: f.role });
+        if (scope !== generation) return;
         invalidate('members'); S.notice = 'Member saved';
       } else if (kind === 'password') {
         if (f.new_password !== f.repeat) throw new Error('The two new passwords do not match');
         await api('POST', '/auth/change-password', { current_password: f.current_password, new_password: f.new_password });
+        if (scope !== generation) return;
         S.notice = 'Password changed';
       } else if (kind === 'user') {
         await api('POST', '/users', { username: f.username, display_name: f.display_name || '', password: f.password });
+        if (scope !== generation) return;
         invalidate('users'); S.notice = 'User created';
       }
       if (kind !== 'preview') form.reset?.();
-    } catch (e) { if (scope === generation || kind === 'login') V2.error = V2Forms.errorMessage(e) + (e.cid ? ` (ref ${e.cid.slice(0, 8)})` : ''); }
+    } catch (e) { if (scope === generation) V2.error = V2Forms.errorMessage(e) + (e.cid ? ` (ref ${e.cid.slice(0, 8)})` : ''); }
+    if (scope !== generation) return;
     if (kind === 'preview' && scope === generation) V2.previewBusy = false;
     V2.busy = false; render();
   });
@@ -337,25 +358,26 @@
     const el = ev.target.closest('[data-v2]');
     if (!el || !V2.enabled) return;
     const act = el.dataset.v2;
+    let scope = generation;
     try {
-      if (act === 'logout') { await api('POST', '/auth/logout', {}); reset(); S.page = 'sources'; V2.error = ''; }
+      if (act === 'logout') { await api('POST', '/auth/logout', {}); if (scope !== generation) return; reset(); S.page = 'sources'; V2.error = ''; }
       else if (act === 'add-filter') { const cols = V2.cat?.objects[V2.previewObject]?.columns || []; if (cols.length && V2.filters.length < 5) V2.filters = [...V2.filters, { column: cols[0].name, op: '=', value: '' }]; }
       else if (act === 'remove-filter') { V2.filters = V2.filters.filter((_, i) => i !== Number(el.dataset.index)); }
       else if (act === 'pick') { setWs(el.dataset.id); }
-      else if (act === 'remove') { await api('DELETE', `/workspaces/${V2.ws}/members/${el.dataset.id}`); invalidate('members'); S.notice = 'Member removed'; }
+      else if (act === 'remove') { await api('DELETE', `/workspaces/${V2.ws}/members/${el.dataset.id}`); if (scope !== generation) return; invalidate('members'); S.notice = 'Member removed'; }
       else if (act === 'pick-conn') { pickConnection(el.dataset.id); V2Route.go('sources', { connection: V2.sel }); }
-      else if (act === 'cancel-req') { await api('POST', connUrl() + `/dataset-requests/${el.dataset.id}/cancel`); invalidate('reqs'); S.notice = 'Request cancelled'; }
-      else if (act === 'copy') { try { await navigator.clipboard.writeText(el.dataset.text); S.notice = 'Copied'; } catch { S.notice = 'Copy failed: select the text manually'; } }
-      else if (act === 'test-conn') { pickConnection(el.dataset.id); const t = await api('POST', connUrl() + '/test'); invalidate('conns'); S.notice = t.status === 'ok' ? 'Connection OK' : 'Test failed: ' + t.error; }
-      else if (act === 'del-conn') { await api('DELETE', `/workspaces/${V2.ws}/connections/${el.dataset.id}`); pickConnection(null); invalidate('conns'); S.notice = 'Connection deleted'; }
-      else if (act === 'refresh-cat') { const r = await api('POST', connUrl() + '/catalog/refresh'); invalidate('cat'); invalidate('catall'); invalidate('reqs'); S.notice = `Catalog revision ${r.revision}: ${r.objects} objects` + (r.requests_applied ? `; ${r.requests_applied} request(s) fulfilled` : ''); }
+      else if (act === 'cancel-req') { await api('POST', connUrl() + `/dataset-requests/${el.dataset.id}/cancel`); if (scope !== generation) return; invalidate('reqs'); S.notice = 'Request cancelled'; }
+      else if (act === 'copy') { try { await navigator.clipboard.writeText(el.dataset.text); if (scope === generation) S.notice = 'Copied'; } catch { if (scope === generation) S.notice = 'Copy failed: select the text manually'; } }
+      else if (act === 'test-conn') { pickConnection(el.dataset.id); scope = generation; const t = await api('POST', connUrl() + '/test'); if (scope !== generation) return; invalidate('conns'); S.notice = t.status === 'ok' ? 'Connection OK' : 'Test failed: ' + t.error; }
+      else if (act === 'del-conn') { await api('DELETE', `/workspaces/${V2.ws}/connections/${el.dataset.id}`); if (scope !== generation) return; pickConnection(null); invalidate('conns'); S.notice = 'Connection deleted'; }
+      else if (act === 'refresh-cat') { const r = await api('POST', connUrl() + '/catalog/refresh'); if (scope !== generation) return; invalidate('cat'); invalidate('catall'); invalidate('reqs'); S.notice = `Catalog revision ${r.revision}: ${r.objects} objects` + (r.requests_applied ? `; ${r.requests_applied} request(s) fulfilled` : ''); }
       else if (act === 'refresh-audit') { invalidate('audit'); }
-    } catch (e) { return fail(e); }
+    } catch (e) { if (scope === generation) fail(e); return; }
     render();
   });
 
   document.addEventListener('change', ev => {
-    if (ev.target.matches('[data-v2-form="preview"] [name="object"]')) { V2.previewObject = ev.target.value; V2.filters = []; V2.result = null; render(); }
+    if (ev.target.matches('[data-v2-form="preview"] [name="object"]')) { generation++; V2.previewBusy = false; V2.previewObject = ev.target.value; V2.filters = []; V2.result = null; render(); }
     const filterRow = ev.target.closest('[data-filter-row]');
     if (filterRow) V2.filters = V2.filters.map((f, i) => i === Number(filterRow.dataset.filterRow) ? { ...f, [ev.target.dataset.filter]: ev.target.value } : f);
     const sel = ev.target.closest('[data-v2-ws]');

@@ -41,7 +41,9 @@ The retained pilot bootstrap logs a pre-existing `ReferenceError: datasets is no
 
 ## Live wide-source limitation
 
-The real `cycletime` preview encountered a Python `OverflowError`. Scalar conversion was hardened against a reproducible valid Arrow date outside Python's year 1–9999 range; Arrow now supplies its exact ISO text instead. **This is unit-tested; the exact failing cycletime scalar could not be isolated or the source retested.** A subsequent one-batch diagnostic received `FlightUnavailableError: End of TCP stream`; a short health/SELECT 1 probe then timed out. No SPICE-host changes or additional large queries were attempted. The controlled wide-table renderer test passed, but the real wide-source Gate 2 check remains open.
+The real `cycletime` preview initially encountered a Python `OverflowError`. When connectivity recovered, a bounded diagnostic confirmed `date32[day]` conversion failures in `OUTBOUND_ATA_CUST` and `OUTBOUND_ETD_BKK`; only metadata/error classes were printed. Arrow now formats dates outside Python's year 1–9999 range as exact ISO text. A separate regression also found that an exact-full batch caused an unnecessary next read after the row budget; reaching the cap now cancels immediately and conservatively marks the result truncated.
+
+Intermittent `FlightUnavailableError: End of TCP stream` and a short health timeout occurred during the earlier probes. **The final Chrome live retest passed:** requesting 1000 rows from `cycletime` returned 477 rows × 286 columns, truncated at the byte budget, with 72 mounted cells. The full 1000-row × 300-column DOM case is covered by the controlled browser fixture. No SPICE-host changes or heavyweight aggregate were attempted. These transient source failures are not evidence of verified upstream cancellation or host memory stability.
 
 ## Controls and remaining Gate 2 items
 
@@ -51,10 +53,12 @@ The real `cycletime` preview encountered a Python `OverflowError`. Scalar conver
 - A closed single-table SELECT grammar plus 2000 seeded hostile inputs covers literal/identifier safety. Decimal exponent expansion is bounded before rendering.
 - UI uses query/table/virtual/form/store cores, with no React, bundler, CDN or automatic preview/mutation retry. Five package versions were explicitly approved in chat and each tarball's SHA-512 and final file's SHA-256 are pinned. `.gitattributes` preserves asset bytes on Windows.
 - The legacy CSP `unsafe-inline` exception remains for the retained pilot handlers (audit R06). New modules use event listeners and local assets. The plan's stricter whole-app `script-src 'self'` therefore remains a documented deviation.
-- Open: source write/DDL rejection, server-side cancellation, real wide-source retest, auth/TLS fixtures, RSS soak/host observations, and proposed login-latency target. **Gate 2 is not declared fully closed.**
+- Open: source write/DDL rejection, server-side cancellation, auth/TLS fixtures, RSS soak/host observations, and proposed login-latency target. **Gate 2 is not declared fully closed.**
 
 ## Automated validation before final review
 
 - Healthy-source checkpoint: 106 v2 tests passed. After the additional date regression, the final run passed 100 and skipped seven live-source tests because SPICE was unreachable; no test failed.
 - UI: 18 tests passed, including real FormApi validation, query deduplication/no retry, routing, table ranges and build dependency closure.
 - Retained pilot: 39 tests passed; `npm run build` and `git diff --check` passed.
+
+After the independent review and its single fix pass: **166 Python tests passed across the whole project, 25 UI tests passed, 39 pilot tests passed, build and diff check passed.** All five Important review findings have reproducing regressions and are addressed; the original review verdict and execution decisions are preserved in `11-load-hardening-review.md`. Final desktop Chrome smoke passed with the real wide source plus the controlled hostile fixture. Fixture objects and metadata leases were checked empty again after shutdown.

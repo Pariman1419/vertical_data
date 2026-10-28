@@ -54,6 +54,12 @@ def build(workspace_access, DB, audit):
         cur.execute("select object_name from connection_allowed_object where connection_id=%s", (cid,))
         return {x["object_name"] for x in cur.fetchall()}
 
+    def lock_learning(cur, cid, obj):
+        # Cross-process, per-dataset learning; no waiting and no global source lock.
+        cur.execute("select pg_try_advisory_xact_lock(197006,hashtext(%s)) as acquired", (str(cid) + ":" + obj,))
+        if not cur.fetchone()["acquired"]:
+            raise limiter.Busy(1)
+
     @r.post(base + "/test")
     def test_connection(connection_id: uuid.UUID, request: Request, ctx=Depends(workspace_access("connection.manage")), db=DB):
         ws = ctx["workspace_id"]
@@ -171,7 +177,19 @@ def build(workspace_access, DB, audit):
             with limiter.lease(pool):
                 with db.cursor() as cur:
                     current = latest(cur, connection_id)
-                policy = current["payload"]["objects"].get(body.object, {}).get("limit_pushdown") if current else None
+                    current_obj = current["payload"]["objects"].get(body.object, {}) if current else {}
+                    if not current or current_obj.get("kind") != obj.get("kind") or current_obj.get("columns") != obj["columns"]:
+                        raise HTTPException(409, "Catalog changed; retry the preview")
+                    policy = current_obj.get("limit_pushdown")
+                    if policy is None:
+                        lock_learning(cur, connection_id, body.object)
+                        # The preceding holder may have committed learning before we took the lock.
+                        current = latest(cur, connection_id)
+                        current_obj = current["payload"]["objects"].get(body.object, {}) if current else {}
+                        if not current or current_obj.get("kind") != obj.get("kind") or current_obj.get("columns") != obj["columns"]:
+                            raise HTTPException(409, "Catalog changed; retry the preview")
+                        policy = current_obj.get("limit_pushdown")
+                revision = current["revision"]
                 limit_applied = policy is not False
                 sql = spice.build_select(body.object, {"select": body.columns, "types": types},
                                          [f.model_dump() for f in body.filters], body.limit if limit_applied else None)
@@ -182,6 +200,14 @@ def build(workspace_access, DB, audit):
                 except spice.SpiceError as e:
                     if e.code != "rejected" or not limit_applied:
                         raise
+                    if policy is not None:
+                        with db.cursor() as cur:
+                            lock_learning(cur, connection_id, body.object)
+                            fresh = latest(cur, connection_id)
+                        if not fresh or fresh["revision"] != revision:
+                            raise HTTPException(409, "Catalog changed; retry the preview")
+                        if fresh["payload"]["objects"].get(body.object, {}).get("limit_pushdown") is False:
+                            raise limiter.Busy(1)  # another reader already learned; next request skips LIMIT
                     if time.monotonic() >= deadline:
                         raise spice.SpiceError("timeout") from None
                     sql = spice.build_select(body.object, {"select": body.columns, "types": types},
@@ -193,10 +219,11 @@ def build(workspace_access, DB, audit):
                     with db.cursor() as cur:
                         cur.execute("select id from connection where id=%s for update", (connection_id,))
                         cur.execute("update catalog_snapshot set payload=jsonb_set(payload,%s,%s)"
-                                    " where connection_id=%s and revision=(select max(revision) from catalog_snapshot"
-                                    " where connection_id=%s) and payload->'objects' ? %s",
+                                    " where connection_id=%s and revision=%s"
+                                    " and revision=(select max(revision) from catalog_snapshot where connection_id=%s)"
+                                    " and payload->'objects'->%s->>'kind' is not distinct from %s",
                                     (["objects", body.object, "limit_pushdown"], Json(limit_applied),
-                                     connection_id, connection_id, body.object))
+                                     connection_id, revision, connection_id, body.object, obj.get("kind")))
                     db.commit()  # learning must be visible before the lease is released
         except limiter.Busy as e:
             audit(db, request, "preview.run", "deny", ws=ws, otype="connection", oid=connection_id,

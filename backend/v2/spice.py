@@ -272,6 +272,8 @@ def run_bounded(conn, sql, max_rows=MAX_ROWS, max_bytes=MAX_BYTES, max_seconds=M
                         break
                     size += row_bytes
                     rows.append(row)
+                if len(rows) >= max_rows:
+                    truncated = True  # stop at the budget; do not probe another batch just to establish EOF
                 if time.monotonic() >= deadline:
                     reader.cancel()
                     raise SpiceError("timeout")

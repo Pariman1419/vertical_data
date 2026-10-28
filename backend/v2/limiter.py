@@ -1,4 +1,5 @@
 """Cross-process source capacity. A crashed caller loses its slot after the TTL."""
+import logging
 import math
 import threading
 from contextlib import contextmanager
@@ -11,6 +12,7 @@ from . import config
 CAPS = {"spice": max(1, int(config.get("UETL_SPICE_CONCURRENCY", "2"))), "odbc": 1}
 _pool = None
 _init_lock = threading.Lock()
+log = logging.getLogger("uetl.limiter")
 
 
 class Busy(Exception):
@@ -79,4 +81,8 @@ def lease(pool: str, ttl_s: int = 30):
     try:
         yield lid
     finally:
-        release(lid)
+        try:
+            release(lid)
+        except (Busy, psycopg2.Error) as error:
+            # Capacity remains reserved until TTL; never replace a completed read or its error.
+            log.warning("Source lease cleanup deferred to TTL (%s)", type(error).__name__)

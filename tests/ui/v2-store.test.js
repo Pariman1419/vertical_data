@@ -56,3 +56,15 @@ test('clearing query state cancels an old session response', async () => {
   q.clear(); complete();
   assert.equal(await pending, 'cancelled');
 });
+test('invalidation while a GET is pending cannot reuse the old response', async () => {
+  const requests = [];
+  const { V2Query: q } = setup(() => new Promise(resolve => requests.push(resolve)));
+  const old = q.fetch(['catalog'], '/catalog').catch(() => 'cancelled');
+  q.invalidate(['catalog']);
+  const fresh = q.fetch(['catalog'], '/catalog');
+  assert.equal(requests.length, 2);
+  requests[0](response({ revision: 1 })); requests[1](response({ revision: 2 }));
+  await old;
+  assert.deepEqual(await fresh, { revision: 2 });
+  assert.deepEqual(await q.fetch(['catalog'], '/catalog'), { revision: 2 });
+});

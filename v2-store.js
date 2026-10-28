@@ -27,7 +27,7 @@
         return data;
       } });
     },
-    invalidate: prefix => client.invalidateQueries({ queryKey: prefix, refetchType: 'none' }),
+    invalidate: prefix => client.removeQueries({ queryKey: prefix }),
     clear() { client.clear(); }
   };
   const pages = new Set(['sources', 'workspaces', 'members', 'audit', 'users', 'account']);

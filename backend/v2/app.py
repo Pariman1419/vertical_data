@@ -403,6 +403,7 @@ STATIC["/v2-main.js"] = "v2-main.js"
 STATIC["/v2-store.js"] = "v2-store.js"
 STATIC["/v2-table.js"] = "v2-table.js"
 STATIC["/v2-forms.js"] = "v2-forms.js"
+STATIC["/v2-capabilities.js"] = "v2-capabilities.js"
 # Manifest entries, rather than a directory mount, define the vendor allowlist.
 for _vendor_file in json.loads((config.ROOT / "vendor/tanstack/MANIFEST.json").read_text()):
     STATIC["/vendor/tanstack/" + _vendor_file] = "vendor/tanstack/" + _vendor_file

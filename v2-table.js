@@ -76,6 +76,7 @@
     const schedule = () => { if (!frame && !destroyed) frame = requestAnimationFrame(() => { frame = 0; paint(); }); };
     function paint() {
       if (destroyed) return;
+      const focused = doc.activeElement?.dataset.sortColumn;
       const columns = m.columns(), rowData = m.rows();
       const view = m.window({ width: scroll.clientWidth, height: Math.max(0, scroll.clientHeight - HEADER),
         scrollTop: scroll.scrollTop, scrollLeft: scroll.scrollLeft });
@@ -93,6 +94,7 @@
         header.setAttribute('role', 'columnheader'); header.setAttribute('aria-colindex', String(c.index + 1));
         header.setAttribute('aria-sort', column.getIsSorted() === 'asc' ? 'ascending' : column.getIsSorted() === 'desc' ? 'descending' : 'none');
         const button = make('button', '', source.name); button.type = 'button'; button.title = 'Sort by ' + source.name;
+        button.dataset.sortColumn = column.id;
         button.addEventListener('click', () => { m.sort(source.name); paint(); });
         header.append(button, make('small', 'muted', source.type));
         header.style.left = (c.index === 0 ? scroll.scrollLeft : c.start) + 'px'; headerRow.append(header);
@@ -110,6 +112,7 @@
         fragment.append(row);
       }
       canvas.replaceChildren(fragment);
+      if (focused) canvas.querySelector(`[data-sort-column="${focused}"]`)?.focus({ preventScroll: true });
     }
     function renderChoices() {
       const visible = new Set(m.columns().map(c => c.columnDef.header));

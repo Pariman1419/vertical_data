@@ -1,5 +1,13 @@
 # Decision log (Phase 1+)
 
+## 2026-10-28 — Load hardening execution
+
+- PG lease authority: `spice=2` (environment override), `odbc=1`; 30 s expiry, separate short DB transactions. Request pool increased from 8 to 16 to leave control capacity at the planner's 10-user load. These load assumptions (10 users, ~1M source rows, 300 columns) remain planner defaults, not confirmed owner capacity requirements.
+- Owner explicitly approved npm-registry downloads of `@tanstack/query-core@5.90.4`, `table-core@8.21.3`, `virtual-core@3.13.12`, `form-core@1.0.0`, `store@0.7.0`. The older form/store pair avoids extra dependencies. Self-hosted ESM, exact versions, pinned tarball/file hashes; no Router/React/CDN/production bundler.
+- Preview GET caching/deduplication is separate from explicit POST submissions. No automatic preview/mutation retry. 429 is a busy response requiring a user retry; no server queue is implied.
+- Execution deviation: retain the pilot CSP `unsafe-inline` exception while all new code uses event listeners; strict whole-app CSP would disable existing pilot handlers. An extreme synthetic aggregate was replaced by a controlled transport-timeout test because server-side cancel is unproven. ODBC load remains unapproved and was not run.
+- Evidence and remaining Gate 2 gaps: `10-load-test-results.md`. Real source availability failed during the wide-source diagnostic; host changes are out of scope. No capacity/SLO claim is inferred from the short load test.
+
 Gate 0 approved by owner on 2026-10-27 ("approve ตาม proposal"). Entries below record what changed from or was decided beyond `00-open-decisions.md`.
 
 | Date | ID | Decision | Why / consequence |

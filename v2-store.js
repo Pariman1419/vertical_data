@@ -5,7 +5,7 @@
   'use strict';
   const state = new T.Store({ enabled: false, checked: false, user: null, csrf: '', workspaces: [], ws: null,
     members: null, audit: null, users: null, conns: null, catall: null, cat: null, reqs: null, sel: null,
-    result: null, error: '', busy: false, previewBusy: false, previewObject: '', filters: [] });
+    result: null, error: '', busy: false, previewBusy: false, previewObject: '', previewLimit: 50, filters: [] });
   const V2Store = {
     get: key => state.state[key],
     set: patch => state.setState(old => ({ ...old, ...patch })),

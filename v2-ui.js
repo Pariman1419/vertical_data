@@ -134,7 +134,7 @@
     if (V2.conns !== null && V2.sel && !list.some(c => c.id === V2.sel)) V2.sel = null;
     if (!V2.sel && list.length) V2.sel = list[0].id;
     const mgr = canManage();
-    const rows = list.map(c => `<tr><td>${esc(c.name)}</td><td><code>${esc(c.base_url)}</code></td><td>${statusBadge(c.status)}</td><td>${c.last_test_at ? esc(new Date(c.last_test_at).toLocaleString()) : '—'}</td>
+    const rows = list.map(c => `<tr><td>${esc(c.name)}</td><td><code>${esc(c.base_url)}</code><br><small class="muted">${esc(V2Capabilities.capabilities(c.capabilities))}</small></td><td>${statusBadge(c.status)}</td><td>${c.last_test_at ? esc(new Date(c.last_test_at).toLocaleString()) : '—'}</td>
       <td><button type="button" data-v2="pick-conn" data-id="${esc(c.id)}">${c.id === V2.sel ? 'Selected' : 'Select'}</button>${mgr ? ` <button type="button" data-v2="test-conn" data-id="${esc(c.id)}">Test</button> <button type="button" data-v2="del-conn" data-id="${esc(c.id)}">Delete</button>` : ''}</td></tr>`).join('');
     const add = mgr ? `<div class="title">Add connection</div><form class="card" data-v2-form="conn"><label class="field">Name<input name="name" required maxlength="100"></label>
       <label class="field">SPICE HTTP URL<input name="base_url" required maxlength="300" placeholder="http://host:8091"></label>
@@ -170,7 +170,7 @@
       <button type="button" data-v2="remove-filter" data-index="${i}" aria-label="Remove filter ${i + 1}">Remove</button></div>`).join('');
     const table = r ? `<div class="card"><p class="muted">${r.rows.length} rows · ${r.columns.length} columns · first 20 columns shown. Choose Columns to change them.</p><div data-v2-table></div>${r.truncated ? '<p class="muted">Truncated at the preview limit.</p>' : ''}</div>` : '';
     return `<div class="title">Preview</div><form class="card" data-v2-form="preview"><label class="field">Object<select name="object">${objs.map(([n]) => `<option ${n === object ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
-      <label class="field">Rows (1–1000)<input name="limit" type="number" min="1" max="1000" value="50"></label>
+      <label class="field">Rows (1–1000)<input name="limit" type="number" min="1" max="1000" value="${esc(V2.previewLimit)}"></label>
       <fieldset><legend>Filters (all must match, up to 5)</legend>${filters}<button type="button" data-v2="add-filter" ${V2.filters.length >= 5 ? 'disabled' : ''}>Add filter</button></fieldset>
       <button class="primary" ${V2.previewBusy ? 'disabled' : ''}>${V2.previewBusy ? 'Running preview…' : 'Run preview'}</button><span role="status">${V2.previewBusy ? ' Reading source…' : ''}</span></form>` + table;
   }
@@ -265,7 +265,7 @@
   function pickConnection(id) {
     generation++;
     V2.sel = id; V2.cat = V2.catall = V2.reqs = V2.result = null;
-    V2.previewObject = ''; V2.filters = [];
+    V2.previewObject = ''; V2.filters = []; V2.previewBusy = false;
   }
   function applyRoute() {
     const route = V2Route.current();
@@ -290,7 +290,8 @@
         V2.busy = true; render();
         adopt(await api('POST', '/auth/login', { username: f.username, password: f.password }).then(r => ({ ...r, workspaces: [] })));
         adopt(await api('GET', '/auth/me'));
-        S.page = V2.workspaces.length ? 'sources' : 'v2ws';
+        S.page = V2.workspaces.length ? 'v2src' : 'v2ws';
+        if (V2.workspaces.length && location.hash.startsWith('#/')) applyRoute();
       } else if (kind === 'workspace') {
         await api('POST', '/workspaces', { name: f.name, slug: f.slug });
         const me = await api('GET', '/auth/me'); V2.workspaces = me.workspaces; S.notice = 'Workspace created';
@@ -328,7 +329,7 @@
       }
       if (kind !== 'preview') form.reset?.();
     } catch (e) { if (scope === generation || kind === 'login') V2.error = V2Forms.errorMessage(e) + (e.cid ? ` (ref ${e.cid.slice(0, 8)})` : ''); }
-    if (kind === 'preview') V2.previewBusy = false;
+    if (kind === 'preview' && scope === generation) V2.previewBusy = false;
     V2.busy = false; render();
   });
 
@@ -345,8 +346,8 @@
       else if (act === 'pick-conn') { pickConnection(el.dataset.id); V2Route.go('sources', { connection: V2.sel }); }
       else if (act === 'cancel-req') { await api('POST', connUrl() + `/dataset-requests/${el.dataset.id}/cancel`); invalidate('reqs'); S.notice = 'Request cancelled'; }
       else if (act === 'copy') { try { await navigator.clipboard.writeText(el.dataset.text); S.notice = 'Copied'; } catch { S.notice = 'Copy failed: select the text manually'; } }
-      else if (act === 'test-conn') { V2.sel = el.dataset.id; const t = await api('POST', connUrl() + '/test'); invalidate('conns'); S.notice = t.status === 'ok' ? 'Connection OK' : 'Test failed: ' + t.error; }
-      else if (act === 'del-conn') { await api('DELETE', `/workspaces/${V2.ws}/connections/${el.dataset.id}`); V2.sel = null; V2.cat = V2.catall = V2.result = null; invalidate('conns'); S.notice = 'Connection deleted'; }
+      else if (act === 'test-conn') { pickConnection(el.dataset.id); const t = await api('POST', connUrl() + '/test'); invalidate('conns'); S.notice = t.status === 'ok' ? 'Connection OK' : 'Test failed: ' + t.error; }
+      else if (act === 'del-conn') { await api('DELETE', `/workspaces/${V2.ws}/connections/${el.dataset.id}`); pickConnection(null); invalidate('conns'); S.notice = 'Connection deleted'; }
       else if (act === 'refresh-cat') { const r = await api('POST', connUrl() + '/catalog/refresh'); invalidate('cat'); invalidate('catall'); invalidate('reqs'); S.notice = `Catalog revision ${r.revision}: ${r.objects} objects` + (r.requests_applied ? `; ${r.requests_applied} request(s) fulfilled` : ''); }
       else if (act === 'refresh-audit') { invalidate('audit'); }
     } catch (e) { return fail(e); }
@@ -361,12 +362,14 @@
     if (sel) { setWs(sel.value); render(); }
   });
   document.addEventListener('input', ev => {
+    if (ev.target.matches('[data-v2-form="preview"] [name="limit"]')) V2.previewLimit = ev.target.value;
     const row = ev.target.closest('[data-filter-row]');
     if (row && ev.target.dataset.filter === 'value') V2.filters = V2.filters.map((f, i) => i === Number(row.dataset.filterRow) ? { ...f, value: ev.target.value } : f);
   });
 
   function setWs(id) {
     generation++; V2Query.clear();
+    V2.previewBusy = false; V2.previewObject = ''; V2.filters = [];
     V2.ws = id; V2.members = V2.audit = V2.conns = V2.cat = V2.catall = V2.reqs = V2.sel = V2.result = null;
     try { if (id) localStorage.setItem(KEY, id); } catch { /* optional convenience */ }
   }

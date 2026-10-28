@@ -207,7 +207,7 @@ def _jsonable(v):
     if v is None or isinstance(v, (bool, str)):
         return v
     if isinstance(v, int):
-        return v if abs(v) <= 2**53 else str(v)  # beyond JS safe integers -> string
+        return v if abs(v) < 2**53 else str(v)  # beyond JS safe integers -> string
     if isinstance(v, float):
         return v if v == v and abs(v) != float("inf") else str(v)
     if isinstance(v, decimal.Decimal):
@@ -217,6 +217,16 @@ def _jsonable(v):
     if isinstance(v, (bytes, bytearray)):
         return "0x" + bytes(v[:32]).hex() + ("..." if len(v) > 32 else "")
     return str(v)
+
+
+def _arrow_jsonable(column, index):
+    try:
+        return _jsonable(column[index].as_py())
+    except OverflowError:
+        # Arrow supports dates/timestamps beyond Python's year 1..9999 range.
+        # Let Arrow format the scalar so valid source data remains exact text.
+        import pyarrow as pa
+        return column.slice(index, 1).cast(pa.string())[0].as_py()
 
 
 def run_bounded(conn, sql, max_rows=MAX_ROWS, max_bytes=MAX_BYTES, max_seconds=MAX_SECONDS, pool="spice"):
@@ -243,14 +253,29 @@ def run_bounded(conn, sql, max_rows=MAX_ROWS, max_bytes=MAX_BYTES, max_seconds=M
                 except StopIteration:
                     break
                 b = chunk.data
-                size += b.nbytes
-                for row in zip(*[c.to_pylist() for c in b.columns]):
+                for index in range(b.num_rows):
+                    if time.monotonic() >= deadline:
+                        reader.cancel()
+                        raise SpiceError("timeout")
                     if len(rows) >= max_rows:
                         truncated = True
                         break
-                    rows.append([_jsonable(v) for v in row])
-                if truncated or size > max_bytes or time.monotonic() > deadline:
-                    truncated = truncated or size > max_bytes or time.monotonic() > deadline
+                    row_bytes = b.slice(index, 1).nbytes
+                    if size + row_bytes > max_bytes:
+                        truncated = True
+                        break
+                    row = [_arrow_jsonable(c, index) for c in b.columns]
+                    # Bound both Arrow payload and escaped JSON (quotes/control chars may expand).
+                    row_bytes = max(row_bytes, len(json.dumps(row, ensure_ascii=False).encode("utf-8")))
+                    if size + row_bytes > max_bytes:
+                        truncated = True
+                        break
+                    size += row_bytes
+                    rows.append(row)
+                if time.monotonic() >= deadline:
+                    reader.cancel()
+                    raise SpiceError("timeout")
+                if truncated:
                     reader.cancel()
                     break
         finally:

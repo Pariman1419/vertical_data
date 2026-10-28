@@ -1,5 +1,14 @@
 # Implementation log
 
+## 2026-10-28 — Load hardening and TanStack UI
+
+- Plan `2026-10-27-load-hardening-and-tanstack-ui.md` reviewed against the code before execution. Migration 0005 up/down/up and PostgreSQL lease races tested; independent short transactions replace the per-process semaphore. Catalog records source kind and learned LIMIT support; previews preserve 429 headers and denial audits and release auth/session locks before source reads.
+- Closed generated SELECT grammar, 2000 hostile seeded cases, bounded decimal exponent formatting. Fixed oversized-row admission, shared Flight/retry time budgets and JS-safe integer boundary. A controlled Arrow-date regression covers year zero; the exact live cycletime scalar remains unisolated after the source connection failed.
+- Five owner-approved TanStack packages vendored with pinned SHA-512 tarballs, SHA-256 files, licenses and Windows newline protection. Native ESM entry, centralized Store/QueryClient/hash routes, 2-D virtual table, exact numeric sort, column picker, form-core validation, five-filter builder, busy feedback and capabilities display. Static build and the legacy static server include the new dependency tree.
+- Chrome headless verified login, Back, one GET per resource, double-submit protection, inert hostile text and bounded DOM cells; controlled 300x1000 fixture used 72 initial / 165 scrolled cells. The mocked busy banner retained Retry-After seconds. Existing pilot bootstrap ReferenceError is recorded, not attributed to new modules.
+- Real 10-user/60-second machine_map load: 773 requests, 232 successes, 541 busy replies, zero errors; p50 637.3 ms / p95 1240.2 ms (all statuses). Sampled lease maximum 2; health maximum 71.5 ms; login maximum 1326.7 ms. Fixture objects were removed and the staging schema preserved; no normal metadata or credentials were printed or committed.
+- Full observations, evidence labels, deviations and open Gate 2 items: `10-load-test-results.md`. ODBC load and a heavyweight live aggregate were not run; real cycletime and upstream cancellation/RSS remain unverified. Gate 2 is not declared closed.
+
 ## 2026-10-27 — Phase 1 start
 - `git tag baseline-pilot`; branch `feature/v2-phase1-foundation`.
 - Env: Python 3.12.10, Node 24, fastapi/sqlalchemy/psycopg2/pytest present; no docker/psql/pg_dump. WSL Ubuntu-24.04 present.

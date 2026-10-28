@@ -1,4 +1,6 @@
 """PostgreSQL access for the API. Always connects as uetl_app (DML only, no DDL)."""
+import threading
+
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
@@ -8,16 +10,18 @@ from . import config
 psycopg2.extras.register_uuid()  # adapt uuid.UUID path parameters
 
 _pool = None
+_init_lock = threading.Lock()
 
 
 def _get_pool():
     global _pool
-    if _pool is None:
-        _pool = psycopg2.pool.ThreadedConnectionPool(
-            1, 8, host=config.get("UETL_PG_HOST"), port=config.get("UETL_PG_PORT", "5432"),
-            dbname=config.get("UETL_PG_DB"), user="uetl_app", password=config.get("UETL_APP_PASSWORD"),
-            connect_timeout=5, application_name="uetl-api", options="-c search_path=uetl_meta",
-            cursor_factory=psycopg2.extras.RealDictCursor)
+    with _init_lock:
+        if _pool is None:
+            _pool = psycopg2.pool.ThreadedConnectionPool(
+                1, 16, host=config.get("UETL_PG_HOST"), port=config.get("UETL_PG_PORT", "5432"),
+                dbname=config.get("UETL_PG_DB"), user="uetl_app", password=config.get("UETL_APP_PASSWORD"),
+                connect_timeout=5, application_name="uetl-api", options="-c search_path=uetl_meta",
+                cursor_factory=psycopg2.extras.RealDictCursor)
     return _pool
 
 

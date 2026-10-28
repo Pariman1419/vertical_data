@@ -255,3 +255,60 @@ def test_lease_released_after_error(fake_catalog, monkeypatch):
     assert c.post(url + "/preview", json={"object": "alarm"}).status_code == 504
     lid = limiter.acquire("odbc")
     limiter.release(lid)
+
+
+def test_preview_time_budget_is_enforced(monkeypatch):
+    import pyarrow.flight as fl
+    budgets = []
+    class Client:
+        def __init__(self, *_): pass
+        def get_flight_info(self, _, options):
+            budgets.append(options.timeout)
+            time.sleep(0.05)
+            return type("Info", (), {"endpoints": [type("Endpoint", (), {"ticket": None})()]})()
+        def do_get(self, _, options):
+            budgets.append(options.timeout)
+            raise fl.FlightTimedOutError("controlled timeout")
+        def close(self): pass
+    monkeypatch.setattr(fl, "FlightClient", Client)
+    monkeypatch.setattr(spice, "flight_endpoint", lambda _: ("127.0.0.1", 50051))
+    start = time.perf_counter()
+    with pytest.raises(spice.SpiceError) as ex:
+        with limiter.lease("odbc"):
+            spice.run_bounded(LIVE, 'SELECT 1', max_seconds=1)
+    assert ex.value.code == "timeout" and time.perf_counter() - start < 3
+    assert 0 < budgets[1] < budgets[0] <= 1
+    lid = limiter.acquire("odbc")
+    limiter.release(lid)
+
+
+def test_byte_budget_never_returns_an_oversized_row(monkeypatch):
+    import pyarrow as pa
+    import pyarrow.flight as fl
+    batch = pa.record_batch([pa.array(["x" * 2000])], names=["text"])
+    class Reader:
+        schema = batch.schema
+        def read_chunk(self): return type("Chunk", (), {"data": batch})()
+        def cancel(self): pass
+    class Client:
+        def __init__(self, *_): pass
+        def get_flight_info(self, *a):
+            return type("Info", (), {"endpoints": [type("Endpoint", (), {"ticket": None})()]})()
+        def do_get(self, *a): return Reader()
+        def close(self): pass
+    monkeypatch.setattr(fl, "FlightClient", Client)
+    monkeypatch.setattr(spice, "flight_endpoint", lambda _: ("127.0.0.1", 50051))
+    _, rows, truncated = spice.run_bounded(LIVE, 'SELECT 1', max_bytes=100)
+    assert rows == [] and truncated
+
+
+def test_js_safe_integer_boundary_is_a_string():
+    assert spice._jsonable(2**53 - 1) == 2**53 - 1
+    assert spice._jsonable(2**53) == str(2**53)
+
+
+def test_arrow_dates_outside_python_range_keep_their_iso_text():
+    import pyarrow as pa
+    values = pa.array([0, -719528], type=pa.int32()).cast(pa.date32())
+    assert spice._arrow_jsonable(values, 0) == "1970-01-01"
+    assert spice._arrow_jsonable(values, 1) == "0000-01-01"

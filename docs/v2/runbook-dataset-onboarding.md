@@ -32,6 +32,8 @@ Add a tiny `zz_reload_probe` dataset copied from a small `_mock` entry, wait 60 
 `docker logs --tail 50 vdl-spice`. Record the result in `docs/v2/implementation-log.md`. Remove the probe afterwards.
 
 ## Known limits
+- After deploying migration 0005 and the new client, refresh each connection's catalog to record its source kind. SPICE reads share a PostgreSQL lease pool (default 2); ODBC data previews use a separate pool of 1. Busy replies carry `Retry-After`; retry manually.
+- LIMIT support is learned per dataset. Once a LIMIT-less retry succeeds, later previews skip LIMIT; a same-kind catalog refresh retains that policy. Preview budgets remain 1000 rows / 1 MB / 10 s, shared across both attempts. Server-side cancellation is still unverified.
 - SPICE has no authentication and the firewall is open to any address (accepted by the owner for the test phase, decision-log 2026-10-27).
 - Only the `pg` and `scada` profiles are supported; Oracle profiles need a sample entry from the host first.
 - SQL Server-backed datasets do not accept a pushed-down `LIMIT`; U-ETL previews them with a client-side stream cut.

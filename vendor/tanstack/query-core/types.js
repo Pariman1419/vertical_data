@@ -1,0 +1,9 @@
+// src/types.ts
+var dataTagSymbol = Symbol("dataTagSymbol");
+var dataTagErrorSymbol = Symbol("dataTagErrorSymbol");
+var unsetMarker = Symbol("unsetMarker");
+export {
+  dataTagErrorSymbol,
+  dataTagSymbol,
+  unsetMarker
+};

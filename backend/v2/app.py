@@ -399,6 +399,10 @@ STATIC = {"/": "index.html", "/index.html": "index.html", "/styles.css": "styles
           "/app.js": "app.js", "/demo-sync.js": "demo-sync.js", "/sync-ui.js": "sync-ui.js",
           "/dataset-workflow.js": "dataset-workflow.js", "/prototype.js": "prototype.js",
           "/real-source-ui.js": "real-source-ui.js", "/v2-ui.js": "v2-ui.js", "/v2-ui.css": "v2-ui.css"}
+STATIC["/v2-main.js"] = "v2-main.js"
+# Manifest entries, rather than a directory mount, define the vendor allowlist.
+for _vendor_file in json.loads((config.ROOT / "vendor/tanstack/MANIFEST.json").read_text()):
+    STATIC["/vendor/tanstack/" + _vendor_file] = "vendor/tanstack/" + _vendor_file
 
 
 @app.get("/{path:path}", include_in_schema=False)
@@ -406,4 +410,4 @@ def static(path: str):
     rel = STATIC.get("/" + path)
     if not rel or re.search(r"\.\.", path):
         raise HTTPException(404, "Not found")
-    return FileResponse(config.ROOT / rel)
+    return FileResponse(config.ROOT / rel, media_type="text/javascript" if rel.endswith((".js", ".mjs")) else None)

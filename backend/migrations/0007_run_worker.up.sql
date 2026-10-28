@@ -58,7 +58,7 @@ begin
   if new.fence < old.fence or new.fence > old.fence + 1 then
     raise exception 'fence must not move backwards or skip' using errcode = '42501';
   end if;
-  if new.attempt < old.attempt then
+  if new.attempt < old.attempt and not (new.state = 'queued' and old.state in ('failed','dead')) then
     raise exception 'attempt must not decrease' using errcode = '42501';
   end if;
   if new.state <> old.state and not (

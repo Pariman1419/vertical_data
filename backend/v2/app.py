@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import activity, config, connections, dataset_requests, rbac, security, sources
+from . import activity, config, connections, dataset_requests, rbac, runs, security, sources
 from .db import get_db, ping
 
 log = logging.getLogger("uetl")
@@ -392,6 +392,7 @@ app.include_router(connections.build(workspace_access, DB, audit))
 app.include_router(sources.build(workspace_access, DB, audit))
 app.include_router(activity.build(workspace_access, DB))
 app.include_router(dataset_requests.build(workspace_access, DB, audit))
+app.include_router(runs.build(workspace_access, DB, audit))
 
 
 # ---------- static UI (existing pilot UI, unchanged files + v2-ui.js) ----------

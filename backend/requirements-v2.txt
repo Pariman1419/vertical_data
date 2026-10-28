@@ -6,3 +6,5 @@ pydantic==2.13.4
 psycopg2-binary==2.9.12
 argon2-cffi==25.1.0
 pyarrow==25.0.1
+dramatiq==2.2.1
+redis==8.1.0

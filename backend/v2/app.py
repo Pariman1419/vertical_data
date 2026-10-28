@@ -72,7 +72,8 @@ def _err(code, message, cid):
 @app.exception_handler(StarletteHTTPException)
 async def http_error(request: Request, exc: StarletteHTTPException):
     msg = exc.detail if isinstance(exc.detail, str) else "Request failed"
-    return JSONResponse(_err(CODES.get(exc.status_code, "error"), msg, request.state.cid), status_code=exc.status_code)
+    return JSONResponse(_err(CODES.get(exc.status_code, "error"), msg, request.state.cid),
+                        status_code=exc.status_code, headers=exc.headers)
 
 
 @app.exception_handler(RequestValidationError)

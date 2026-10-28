@@ -195,3 +195,63 @@ def test_refresh_stores_kind_and_hides_from_string(env, conn, monkeypatch):
     for path in ("/catalog", "/catalog/all"):
         assert '"from"' not in c.get(url + path).text
 
+
+@pytest.fixture()
+def fake_catalog(conn, monkeypatch):
+    c, url = conn
+    monkeypatch.setattr(spice, "list_datasets", lambda _: [{"name": "alarm", "kind": "odbc"}])
+    monkeypatch.setattr(spice, "describe", lambda *_: [{"name": "id", "type": "Int64", "nullable": False}])
+    assert c.post(url + "/catalog/refresh").status_code == 200
+    assert c.put(url + "/allowed-objects", json={"objects": ["alarm"]}).status_code == 200
+    return c, url
+
+
+def test_odbc_dataset_preview_takes_the_odbc_pool(fake_catalog, monkeypatch):
+    c, url = fake_catalog
+    pools = []
+    acquire = limiter.acquire
+    def take(pool, ttl_s=30):
+        pools.append(pool)
+        return acquire(pool, ttl_s)
+    monkeypatch.setattr(limiter, "acquire", take)
+    monkeypatch.setattr(spice, "run_bounded", lambda *a, **kw: ([{"name": "id", "type": "Int64"}], [[1]], False))
+    r = c.post(url + "/preview", json={"object": "alarm"})
+    assert r.status_code == 200 and r.json()["limit_applied"] is True
+    assert pools == ["odbc"]
+
+
+def test_busy_returns_429_with_retry_after(env, fake_catalog, monkeypatch):
+    c, url = fake_catalog
+    def busy(*a, **kw):
+        raise limiter.Busy(3)
+    monkeypatch.setattr(limiter, "acquire", busy)
+    r = c.post(url + "/preview", json={"object": "alarm"})
+    assert r.status_code == 429 and r.headers["Retry-After"] == "3"
+    env.cur.execute("select outcome,detail from audit_event where workspace_id=%s and action='preview.run' order by id desc limit 1", (env.ws1,))
+    row = env.cur.fetchone()
+    assert row["outcome"] == "deny" and row["detail"]["reason"] == "busy"
+
+
+def test_limit_less_retry_happens_once_per_dataset(fake_catalog, monkeypatch):
+    c, url = fake_catalog
+    statements = []
+    def read(_, sql, **kw):
+        statements.append(sql)
+        if " LIMIT " in sql:
+            raise spice.SpiceError("rejected")
+        return [{"name": "id", "type": "Int64"}], [[1]], True
+    monkeypatch.setattr(spice, "run_bounded", read)
+    assert c.post(url + "/preview", json={"object": "alarm"}).json()["limit_applied"] is False
+    assert c.get(url + "/catalog").json()["objects"]["alarm"]["limit_pushdown"] is False
+    assert c.post(url + "/preview", json={"object": "alarm"}).status_code == 200
+    assert len(statements) == 3 and "LIMIT" not in statements[-1]
+
+
+def test_lease_released_after_error(fake_catalog, monkeypatch):
+    c, url = fake_catalog
+    def fail(*a, **kw):
+        raise spice.SpiceError("timeout")
+    monkeypatch.setattr(spice, "run_bounded", fail)
+    assert c.post(url + "/preview", json={"object": "alarm"}).status_code == 504
+    lid = limiter.acquire("odbc")
+    limiter.release(lid)

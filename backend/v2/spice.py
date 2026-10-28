@@ -14,17 +14,15 @@ import logging
 import re
 import socket
 import ssl
-import threading
 import time
 from urllib.parse import urlparse
 
-from . import config, netpolicy
+from . import config, limiter, netpolicy
 
 log = logging.getLogger("uetl.spice")
 IDENT_RE = re.compile(r"^[A-Za-z0-9_]+$")
 OBJECT_RE = re.compile(r"^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+){0,2}$")
 MAX_ROWS, MAX_BYTES, MAX_SECONDS = 1000, 1_000_000, 10
-_SLOTS = threading.BoundedSemaphore(int(config.get("UETL_SPICE_CONCURRENCY", "2")))
 
 SAFE = {
     "unreachable": "The source could not be reached.",
@@ -42,15 +40,6 @@ class SpiceError(Exception):
         self.code, self.safe = code, SAFE[code]
         if raw:
             log.warning("spice error %s: %s", code, str(raw)[:500])
-
-
-class _slot:
-    def __enter__(self):
-        if not _SLOTS.acquire(timeout=2):
-            raise SpiceError("busy")
-
-    def __exit__(self, *a):
-        _SLOTS.release()
 
 
 class _PinnedTLS(http.client.HTTPSConnection):
@@ -87,10 +76,12 @@ def _rest(conn, method, path, body=None, max_bytes=2_000_000):
     if (t := _token(conn)):
         headers["Authorization"] = "Bearer " + t
     try:
-        with _slot():
+        with limiter.lease("spice"):
             c.request(method, (u.path or "") + path, body=body.encode() if body else None, headers=headers)
             r = c.getresponse()
             data = r.read(max_bytes + 1)
+    except limiter.Busy:
+        raise SpiceError("busy") from None
     except SpiceError:
         raise
     except (socket.timeout, TimeoutError):
@@ -204,7 +195,7 @@ def _jsonable(v):
     return str(v)
 
 
-def run_bounded(conn, sql, max_rows=MAX_ROWS, max_bytes=MAX_BYTES, max_seconds=MAX_SECONDS):
+def run_bounded(conn, sql, max_rows=MAX_ROWS, max_bytes=MAX_BYTES, max_seconds=MAX_SECONDS, pool="spice"):
     """Read `sql` over Flight; stop at the first exhausted budget. Returns (columns, rows, truncated)."""
     import pyarrow as pa
     import pyarrow.flight as fl
@@ -214,30 +205,32 @@ def run_bounded(conn, sql, max_rows=MAX_ROWS, max_bytes=MAX_BYTES, max_seconds=M
     opts = fl.FlightCallOptions(timeout=max_seconds, headers=headers)
     rows, size, truncated, cols = [], 0, False, []
     try:
-        with _slot():
-            client = fl.FlightClient(f"grpc://{ip}:{port}")
-            try:
-                info = client.get_flight_info(fl.FlightDescriptor.for_command(sql.encode()), opts)
-                reader = client.do_get(info.endpoints[0].ticket, opts)
-                cols = [{"name": f.name, "type": str(f.type)} for f in reader.schema]
-                while True:
-                    try:
-                        chunk = reader.read_chunk()
-                    except StopIteration:
+        client = fl.FlightClient(f"grpc://{ip}:{port}")
+        try:
+            info = client.get_flight_info(fl.FlightDescriptor.for_command(sql.encode()), opts)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise SpiceError("timeout")
+            reader = client.do_get(info.endpoints[0].ticket, fl.FlightCallOptions(timeout=remaining, headers=headers))
+            cols = [{"name": f.name, "type": str(f.type)} for f in reader.schema]
+            while True:
+                try:
+                    chunk = reader.read_chunk()
+                except StopIteration:
+                    break
+                b = chunk.data
+                size += b.nbytes
+                for row in zip(*[c.to_pylist() for c in b.columns]):
+                    if len(rows) >= max_rows:
+                        truncated = True
                         break
-                    b = chunk.data
-                    size += b.nbytes
-                    for row in zip(*[c.to_pylist() for c in b.columns]):
-                        if len(rows) >= max_rows:
-                            truncated = True
-                            break
-                        rows.append([_jsonable(v) for v in row])
-                    if truncated or size > max_bytes or time.monotonic() > deadline:
-                        truncated = truncated or size > max_bytes or time.monotonic() > deadline
-                        reader.cancel()
-                        break
-            finally:
-                client.close()
+                    rows.append([_jsonable(v) for v in row])
+                if truncated or size > max_bytes or time.monotonic() > deadline:
+                    truncated = truncated or size > max_bytes or time.monotonic() > deadline
+                    reader.cancel()
+                    break
+        finally:
+            client.close()
     except SpiceError:
         raise
     except fl.FlightTimedOutError:

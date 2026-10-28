@@ -3,6 +3,7 @@
 Rules: no route accepts SQL text; preview builds its statement from an allowlisted object, catalog-known
 columns and typed filter values; SPICE error text never reaches the client (spice.SpiceError.safe only).
 """
+import time
 import uuid
 from typing import Literal
 
@@ -10,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from psycopg2.extras import Json
 
-from . import spice
+from . import limiter, spice
 
 CONN_SQL = ("select c.id, c.name, c.base_url, c.tls_verify, c.timeout_s, s.name as secret_ref"
             " from connection c left join secret_ref s on s.id=c.secret_ref_id where c.workspace_id=%s and c.id=%s")
@@ -62,12 +63,16 @@ def build(workspace_access, DB, audit):
         try:
             caps["rest"] = spice.health(c)
             caps["datasets"] = len(spice.list_datasets(c))
-            cols, rows, _ = spice.run_bounded(c, "SELECT 1", max_rows=1, max_seconds=min(c["timeout_s"], 10))
+            db.commit()  # do not hold the session row lock while reading the source
+            with limiter.lease("spice"):
+                cols, rows, _ = spice.run_bounded(c, "SELECT 1", max_rows=1, max_seconds=min(c["timeout_s"], 10))
             caps["flight"] = bool(rows)
             caps["streaming"] = caps["flight"]
             caps["bind_parameters"] = False  # Flight path has none (docs/v2/09)
             if not (caps["rest"] and caps["flight"]):
                 status, err = "failed", spice.SAFE["protocol"]
+        except limiter.Busy as e:
+            raise HTTPException(429, spice.SAFE["busy"], headers={"Retry-After": str(e.retry_after)}) from None
         except spice.SpiceError as e:
             status, err = "failed", e.safe
         with db.cursor() as cur:
@@ -149,28 +154,55 @@ def build(workspace_access, DB, audit):
             raise HTTPException(403, "Object is not on this connection's allowlist")
         if not snap or body.object not in snap["payload"]["objects"]:
             raise HTTPException(409, "Catalog is missing for this object; refresh the catalog first")
-        types = {col["name"]: col["type"] for col in snap["payload"]["objects"][body.object]["columns"]}
+        obj = snap["payload"]["objects"][body.object]
+        types = {col["name"]: col["type"] for col in obj["columns"]}
         names = list(body.columns) + [f.column for f in body.filters]
         unknown = [n for n in names if n not in types]
         if unknown:
             raise HTTPException(422, "Unknown column")
         try:
             sql = spice.build_select(body.object, {"select": body.columns, "types": types},
-                                     [f.model_dump() for f in body.filters], body.limit)
+                                     [f.model_dump() for f in body.filters], body.limit if obj.get("limit_pushdown") is not False else None)
         except ValueError:
             raise HTTPException(422, "Filter value does not fit the column type") from None
+        db.commit()  # release auth/session locks before remote I/O; lease has its own transaction
+        pool = "odbc" if obj.get("kind") == "odbc" else "spice"
         try:
-            try:
-                cols, rows, truncated = spice.run_bounded(c, sql, max_rows=body.limit)
-            except spice.SpiceError as e:
-                if e.code != "rejected":
-                    raise
-                # SPICE pushes LIMIT down to the underlying database; SQL Server-backed datasets reject it
-                # (observed live: alarm, tooling_log, cim_machine_profile). Retry without LIMIT: the stream is
-                # still cut at max_rows / bytes / seconds by run_bounded, so the read stays bounded.
+            with limiter.lease(pool):
+                with db.cursor() as cur:
+                    current = latest(cur, connection_id)
+                policy = current["payload"]["objects"].get(body.object, {}).get("limit_pushdown") if current else None
+                limit_applied = policy is not False
                 sql = spice.build_select(body.object, {"select": body.columns, "types": types},
-                                         [f.model_dump() for f in body.filters], None)
-                cols, rows, truncated = spice.run_bounded(c, sql, max_rows=body.limit)
+                                         [f.model_dump() for f in body.filters], body.limit if limit_applied else None)
+                deadline = time.monotonic() + min(c["timeout_s"], spice.MAX_SECONDS)
+                try:
+                    cols, rows, truncated = spice.run_bounded(c, sql, max_rows=body.limit, pool=pool,
+                                                             max_seconds=max(0.001, deadline-time.monotonic()))
+                except spice.SpiceError as e:
+                    if e.code != "rejected" or not limit_applied:
+                        raise
+                    if time.monotonic() >= deadline:
+                        raise spice.SpiceError("timeout") from None
+                    sql = spice.build_select(body.object, {"select": body.columns, "types": types},
+                                             [f.model_dump() for f in body.filters], None)
+                    cols, rows, truncated = spice.run_bounded(c, sql, max_rows=body.limit, pool=pool,
+                                                             max_seconds=deadline-time.monotonic())
+                    limit_applied = False
+                if policy is None or policy != limit_applied:
+                    with db.cursor() as cur:
+                        cur.execute("select id from connection where id=%s for update", (connection_id,))
+                        cur.execute("update catalog_snapshot set payload=jsonb_set(payload,%s,%s)"
+                                    " where connection_id=%s and revision=(select max(revision) from catalog_snapshot"
+                                    " where connection_id=%s) and payload->'objects' ? %s",
+                                    (["objects", body.object, "limit_pushdown"], Json(limit_applied),
+                                     connection_id, connection_id, body.object))
+                    db.commit()  # learning must be visible before the lease is released
+        except limiter.Busy as e:
+            audit(db, request, "preview.run", "deny", ws=ws, otype="connection", oid=connection_id,
+                  detail={"object": body.object, "reason": "busy"})
+            db.commit()
+            raise HTTPException(429, spice.SAFE["busy"], headers={"Retry-After": str(e.retry_after)}) from None
         except spice.SpiceError as e:
             audit(db, request, "preview.run", "error", ws=ws, otype="connection", oid=connection_id,
                   detail={"object": body.object, "code": e.code})
@@ -178,6 +210,6 @@ def build(workspace_access, DB, audit):
             fail(e)
         audit(db, request, "preview.run", "allow", ws=ws, otype="connection", oid=connection_id,
               detail={"object": body.object, "rows": len(rows), "truncated": truncated, "filters": len(body.filters)})
-        return {"columns": cols, "rows": rows, "truncated": truncated}
+        return {"columns": cols, "rows": rows, "truncated": truncated, "limit_applied": limit_applied}
 
     return r

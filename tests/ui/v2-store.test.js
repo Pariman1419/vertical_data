@@ -49,6 +49,11 @@ test('store notifies subscribers and stops on unsubscribe', () => {
   s.set({ ws: 'one' }); assert.equal(s.get('ws'), 'one'); assert.equal(count, 1);
   unsubscribe(); s.set({ ws: 'two' }); assert.equal(count, 1);
 });
+test('Source activity has its own hash route', () => {
+  const { V2Route: route } = setup();
+  route.go('source-activity');
+  assert.deepEqual(route.current(), { page: 'source-activity' });
+});
 test('clearing query state cancels an old session response', async () => {
   let complete;
   const { V2Query: q } = setup(() => new Promise(resolve => { complete = () => resolve(response('private')); }));

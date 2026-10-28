@@ -3,6 +3,7 @@
 Rules: no route accepts SQL text; preview builds its statement from an allowlisted object, catalog-known
 columns and typed filter values; SPICE error text never reaches the client (spice.SpiceError.safe only).
 """
+import json
 import time
 import uuid
 from typing import Literal
@@ -11,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from psycopg2.extras import Json
 
-from . import limiter, spice
+from . import activity, limiter, spice
 
 CONN_SQL = ("select c.id, c.name, c.base_url, c.tls_verify, c.timeout_s, s.name as secret_ref"
             " from connection c left join secret_ref s on s.id=c.secret_ref_id where c.workspace_id=%s and c.id=%s")
@@ -173,8 +174,16 @@ def build(workspace_access, DB, audit):
             raise HTTPException(422, "Filter value does not fit the column type") from None
         db.commit()  # release auth/session locks before remote I/O; lease has its own transaction
         pool = "odbc" if obj.get("kind") == "odbc" else "spice"
+        waited_ms = 0
+        def event(kind, rows=None, bytes=None):
+            activity.record(kind, workspace_id=ws, connection_id=connection_id, dataset=body.object,
+                            user_id=ctx['user']['id'], waited_ms=waited_ms, rows=rows, bytes=bytes, db=db)
+        def waited(milliseconds):
+            nonlocal waited_ms
+            waited_ms = milliseconds
+            event('queue_wait')
         try:
-            with limiter.lease(pool):
+            with limiter.lease(pool, on_wait=waited):
                 with db.cursor() as cur:
                     current = latest(cur, connection_id)
                     current_obj = current["payload"]["objects"].get(body.object, {}) if current else {}
@@ -226,15 +235,18 @@ def build(workspace_access, DB, audit):
                                      connection_id, revision, connection_id, body.object, obj.get("kind")))
                     db.commit()  # learning must be visible before the lease is released
         except limiter.Busy as e:
+            event('busy_429')
             audit(db, request, "preview.run", "deny", ws=ws, otype="connection", oid=connection_id,
                   detail={"object": body.object, "reason": "busy"})
             db.commit()
             raise HTTPException(429, spice.SAFE["busy"], headers={"Retry-After": str(e.retry_after)}) from None
         except spice.SpiceError as e:
+            event({'busy': 'busy_429', 'timeout': 'timeout'}.get(e.code, 'read_error'))
             audit(db, request, "preview.run", "error", ws=ws, otype="connection", oid=connection_id,
                   detail={"object": body.object, "code": e.code})
             db.commit()  # keep the audit row although the request fails
             fail(e)
+        event('read_ok', rows=len(rows), bytes=len(json.dumps(rows, ensure_ascii=False).encode('utf-8')))
         audit(db, request, "preview.run", "allow", ws=ws, otype="connection", oid=connection_id,
               detail={"object": body.object, "rows": len(rows), "truncated": truncated, "filters": len(body.filters)})
         return {"columns": cols, "rows": rows, "truncated": truncated, "limit_applied": limit_applied}

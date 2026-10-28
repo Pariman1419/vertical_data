@@ -98,8 +98,16 @@ def release(lease_id):
 
 
 @contextmanager
-def lease(pool: str, ttl_s: int = 30):
-    lid = acquire(pool, ttl_s)
+def lease(pool: str, ttl_s: int = 30, on_wait=None):
+    started = time.monotonic()
+    try:
+        lid = acquire(pool, ttl_s)
+    finally:
+        if on_wait is not None:
+            try:
+                on_wait(max(0, math.ceil((time.monotonic() - started) * 1000)))
+            except Exception as error:
+                log.warning('Source wait observer unavailable (%s)', type(error).__name__)
     try:
         yield lid
     finally:

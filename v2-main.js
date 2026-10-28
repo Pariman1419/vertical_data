@@ -4,4 +4,5 @@ import './v2-store.js';
 import './v2-table.js';
 import './v2-forms.js';
 import './v2-capabilities.js';
+import './v2-jobs.js';
 import './v2-ui.js';

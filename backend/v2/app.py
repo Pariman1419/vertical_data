@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import config, connections, dataset_requests, rbac, security, sources
+from . import activity, config, connections, dataset_requests, rbac, security, sources
 from .db import get_db, ping
 
 log = logging.getLogger("uetl")
@@ -390,6 +390,7 @@ def audit_events(limit: int = 100, ctx=Depends(workspace_access("settings.manage
 # ---------- Phase 2: secret refs + source connections ----------
 app.include_router(connections.build(workspace_access, DB, audit))
 app.include_router(sources.build(workspace_access, DB, audit))
+app.include_router(activity.build(workspace_access, DB))
 app.include_router(dataset_requests.build(workspace_access, DB, audit))
 
 
@@ -404,6 +405,7 @@ STATIC["/v2-store.js"] = "v2-store.js"
 STATIC["/v2-table.js"] = "v2-table.js"
 STATIC["/v2-forms.js"] = "v2-forms.js"
 STATIC["/v2-capabilities.js"] = "v2-capabilities.js"
+STATIC["/v2-jobs.js"] = "v2-jobs.js"
 # Manifest entries, rather than a directory mount, define the vendor allowlist.
 for _vendor_file in json.loads((config.ROOT / "vendor/tanstack/MANIFEST.json").read_text()):
     STATIC["/vendor/tanstack/" + _vendor_file] = "vendor/tanstack/" + _vendor_file

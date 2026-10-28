@@ -1,5 +1,16 @@
 # Implementation log
 
+## 2026-10-28 — Phase 3 Task 1 (STOP for review)
+
+- Task 0 (`64b2a15`) was independently accepted by the owner/Claude (134/26/39). Implemented only Source activity; Task 2 and later remain untouched.
+- RED: new backend and UI tests failed on the absent activity module/component before implementation; a later busy-origin regression failed because a source-generated 429 was initially classified as read_error, then passed after correcting the closed kind mapping.
+- `0006_activity` introduces closed metric fields, safe kind/dataset checks, append-only triggers/permissions and fixed 30-day privileged pruning. Events retain historical UUIDs without cascading entity deletes. `activity.record` is savepoint-based best-effort with bounded insert timeouts and fixed/class-only diagnostics. Preview instrumentation reports wait, busy, timeout and safe outcome metrics; source text, SQL, tokens/filter values are absent from table/API.
+- Added scoped keyset GET (connection.read, nonmember 404, limit <=500, numeric strings) and Source activity menu/hash route, filters, refresh, badges, empty/error states and page controls using textContent. New asset is included in both static serving/build paths. Reaper has the retention entry point only; no background service is started.
+- Isolated migration setup: native PG17 initdb failed because postgres.bki is absent. Owner then explicitly approved PostgreSQL13-only test Compose in chat. Unique project/tmpfs/random loopback port, no .env, and automatic down in finally. **No migration was applied to the shared database.** Plain activity GET on that unmodified schema is intentionally sanitized 503; normal previews remain available.
+- Decisions/costs: use `0006_activity` to precede future `0006_runs` lexically without editing migration history; allow only trusted-owner expired-row maintenance to reconcile append-only with retention; scheduling pruning remains Task 5; record JSON row bytes rather than claim upstream Arrow/network bytes; instrumentation covers preview data reads, not metadata probes. Full contract and independent-review commands are in `12-source-activity.md`.
+- Final verification: opt-in isolated/full `python -m pytest tests/v2 -q -p no:cacheprovider --tb=short` **149 passed** (15 isolated activity cases); `node --test tests/ui/*.test.js` **31 passed**; `npm.cmd test` **39 passed**; build dependency closure and diff check passed. Cleanup: zero owned test containers/networks, scratch folders, live_fixture processes and source leases. Read-only check confirms no source_event table on shared PG. The main schema migration remains pending owner approval.
+- STOP after Task 1 commit for Claude/owner review. Shared up/down migrations and any unrelated Compose startup still require owner approval. Only explicit task-owned paths may be staged; no git add -A or scratch ledger is used.
+
 ## 2026-10-28 — Phase 3 Task 0 (STOP for Claude review)
 
 - Plan: `docs/superpowers/plans/2026-10-28-phase3-queue-and-worker.md`, base `3e2c97b`. Only Task 0 implemented; Task 1 and later have not started. Codex is the sole writer; Claude's independent review is pending.

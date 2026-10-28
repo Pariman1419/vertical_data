@@ -30,11 +30,11 @@
     invalidate: prefix => client.removeQueries({ queryKey: prefix }),
     clear() { client.clear(); }
   };
-  const pages = new Set(['sources', 'workspaces', 'members', 'audit', 'users', 'account']);
+  const pages = new Set(['sources', 'workspaces', 'members', 'audit', 'users', 'account', 'source-activity']);
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const V2Route = {
     current() {
-      const match = /^#\/([a-z]+)(?:\/([0-9a-f-]+))?$/.exec(env.location.hash);
+      const match = /^#\/([a-z-]+)(?:\/([0-9a-f-]+))?$/.exec(env.location.hash);
       if (!match || !pages.has(match[1]) || (match[2] && (match[1] !== 'sources' || !uuid.test(match[2])))) return { page: 'sources' };
       return { page: match[1], ...(match[2] ? { connection: match[2] } : {}) };
     },

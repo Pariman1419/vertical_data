@@ -1,5 +1,6 @@
 const fs=require('fs');const path=require('path');const vm=require('vm');
 const root=path.resolve(__dirname,'..');const files=['index.html','styles.css','ui-reference-theme.css','app.js','demo-sync.js','sync-ui.js','dataset-workflow.js','real-source-ui.js','prototype.js','assets/utac-logo-source.png','v2-main.js','v2-store.js','v2-table.js','v2-forms.js','v2-capabilities.js','v2-ui.js','v2-ui.css'];
+files.push('v2-jobs.js');
 const vendor=JSON.parse(fs.readFileSync(path.join(root,'vendor/tanstack/MANIFEST.json'),'utf8'));
 for(const [file,meta] of Object.entries(vendor)){const rel='vendor/tanstack/'+file;if(require('node:crypto').createHash('sha256').update(fs.readFileSync(path.join(root,rel))).digest('hex')!==meta.sha256)throw new Error('Vendor hash mismatch: '+file);files.push(rel);}
 files.push('vendor/tanstack/MANIFEST.json');

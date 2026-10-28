@@ -128,3 +128,10 @@
 - Type mapping documented in `docs/v2/13-etl-type-map.md`: exact preservation of Decimal128(38,10), signed int64 max, unsigned uint64 via numeric(20, 0), NULL per type, timestamps with tz, and out-of-range dates via ISO text.
 - Evidence **TESTED LIVE / ISOLATED**: `tests/v2/test_etl_types.py` (7 passed in 5.84s). 5,000,000 synthetic rows streamed from live SPICE in 3.68 s with sampled RSS growth of only 6.21 MiB (< 300 MB ceiling) and clean halt with `error_code=budget_rows`. Resource budgets (bytes/seconds) and cancellation verified by fakes. All DB staging/publish tests ran inside rolled back transactions against `spiec_verti`; zero test artifacts persisted.
 - Regression suite: 148 passed across `tests/v2` (excluding the 15 unapproved activity compose cases), 31 UI tests passed, 39 legacy tests passed. Only task-owned files committed.
+
+## 2026-10-28 — Phase 3 Task 4 review fixes (implementer: agy)
+- Addressed Claude review items 1–3 from `docs/v2/handoff-phase3-agy.md` (item 4 table creation permissions left untouched awaiting owner decision):
+  1. `publish_generation`: swapped `CREATE OR REPLACE VIEW` for `DROP VIEW IF EXISTS` + `CREATE VIEW` in one transaction. Tested: generation 2 with altered types and added columns publishes cleanly.
+  2. `extract_batches`: enforced dataset allowlist; routed queries through `spice.assert_select_shape` and `spice.build_select` with identifier validation. Tested: injection attempts via `"`, `;`, DML (`DROP`, `DELETE`), and unallowed datasets rejected before reaching SPICE.
+  3. `limiter`: added `renew(lease_id, ttl_s)` and background heartbeat renewal to `limiter.lease(..., heartbeat_s=10.0)` ensuring active slots are held during long extractions up to 30 minutes. Tested: lease remains counted in DB past its initial TTL.
+- Verification: `tests/v2/test_etl_types.py` 10/10 passed in 9.93s; full v2 test suite 151 passed; UI suite 31 passed; legacy suite 39 passed. Zero scratch files or persistent DB mutations.

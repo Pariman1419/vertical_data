@@ -25,6 +25,7 @@ log = logging.getLogger("uetl.etl")
 
 TARGET_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{2,60}$")
 SAFE_IDENT_RE = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
+GEN_SERIES_RE = re.compile(r"^SELECT \* FROM generate_series\([1-9][0-9]*,\s*[1-9][0-9]*(?:,\s*[1-9][0-9]*)?\)$")
 
 
 class EtlError(Exception):
@@ -174,26 +175,52 @@ def extract_batches(conn: dict, spec: dict, *, budget: Optional[Union[Budget, di
     if is_cancelled and is_cancelled():
         raise EtlCancelled("ETL run was cancelled before extract started")
 
+    # Validate dataset and allowlist
+    dataset = spec.get("dataset")
+    allowed_datasets = spec.get("allowed_datasets")
+    if allowed_datasets is not None:
+        if not dataset or dataset not in allowed_datasets:
+            raise EtlError(f"Dataset '{dataset}' is not on the allowlist")
+
     # Build or extract query
     sql_text = spec.get("sql")
-    if not sql_text:
-        dataset = spec.get("dataset")
+    if sql_text:
+        # Never pass raw SQL straight to Flight; route through assert_select_shape (or synthetic generator)
+        if not GEN_SERIES_RE.match(sql_text):
+            if not dataset:
+                raise ValueError("spec['sql'] requires 'dataset' to validate SELECT shape")
+            allowed_cols = set(spec.get("allowed_columns") or (spec.get("columns", {}).get("types", {}) if isinstance(spec.get("columns"), dict) else []))
+            spice.assert_select_shape(sql_text, dataset, allowed_cols)
+    else:
         if not dataset:
-            raise ValueError("spec must provide 'dataset' or 'sql'")
+            raise ValueError("spec must provide 'dataset'")
         columns = spec.get("columns")
         filters = spec.get("filters", [])
         limit = spec.get("limit")
-        if columns and isinstance(columns, dict) and "select" in columns:
-            sql_text = spice.build_select(dataset, columns, filters, limit)
-        elif columns and isinstance(columns, list):
-            sel = ", ".join('"' + c + '"' for c in columns)
-            sql_text = f'SELECT {sel} FROM {spice.quote(dataset)}'
-        else:
-            sql_text = f'SELECT * FROM {spice.quote(dataset)}'
 
-    # Lease acquisition via limiter
+        if isinstance(columns, dict) and "select" in columns:
+            cols_spec = columns
+        elif isinstance(columns, list):
+            # Validate every column identifier strictly
+            for c in columns:
+                c_name = c["name"] if isinstance(c, dict) else c
+                if not spice.IDENT_RE.match(str(c_name)):
+                    raise ValueError(f"Invalid column identifier: {c_name}")
+            types_dict = spec.get("column_types") or {
+                (c["name"] if isinstance(c, dict) else c): (c.get("type", "Utf8") if isinstance(c, dict) else "Utf8")
+                for c in columns
+            }
+            cols_spec = {"select": [(c["name"] if isinstance(c, dict) else c) for c in columns], "types": types_dict}
+        else:
+            types_dict = spec.get("column_types", {})
+            cols_spec = {"select": [], "types": types_dict}
+
+        # spice.build_select checks identifiers, escapes filter values, and calls assert_select_shape
+        sql_text = spice.build_select(dataset, cols_spec, filters, limit)
+
+    # Lease acquisition via limiter with periodic heartbeat renewal (maintains lease up to 30 min)
     try:
-        with limiter.lease("spice"):
+        with limiter.lease("spice", ttl_s=30, heartbeat_s=10.0):
             ip, port = spice.flight_endpoint(conn)
             deadline = time.monotonic() + b.max_seconds
             headers = [(b"authorization", ("Bearer " + t).encode())] if (t := spice._token(conn)) else []
@@ -411,10 +438,12 @@ def publish_generation(cur, run_id: Any, fence: int, *, spec: Optional[dict] = N
         sql.Identifier(gen_table)
     ))
 
-    # Atomic view swap
+    # Atomic view swap: DROP VIEW IF EXISTS followed by CREATE VIEW in the same transaction
+    # (PostgreSQL forbids CREATE OR REPLACE VIEW if columns are reordered, renamed, or retyped).
     view_ident = sql.Identifier("uetl_published", target_name)
     gen_ident = sql.Identifier("uetl_published", gen_table)
-    cur.execute(sql.SQL("CREATE OR REPLACE VIEW {} AS SELECT * FROM {}").format(
+    cur.execute(sql.SQL("DROP VIEW IF EXISTS {}").format(view_ident))
+    cur.execute(sql.SQL("CREATE VIEW {} AS SELECT * FROM {}").format(
         view_ident, gen_ident
     ))
 

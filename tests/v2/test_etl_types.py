@@ -218,14 +218,15 @@ def test_budget_byte_and_time_enforcement():
     import unittest.mock as mock
     with mock.patch("pyarrow.flight.FlightClient", return_value=FakeClient()):
         with mock.patch.object(limiter, "lease"):
+            spec = {"dataset": "t", "columns": ["id"]}
             with pytest.raises(etl.EtlBudgetExceeded) as exc_byte:
-                list(etl.extract_batches(LIVE, {"sql": "SELECT 1"}, budget=etl.Budget(max_bytes=10)))
+                list(etl.extract_batches(LIVE, spec, budget=etl.Budget(max_bytes=10)))
             assert exc_byte.value.error_code == "budget_bytes"
 
             # Time budget
             budget_time = etl.Budget(max_seconds=0)  # deadline already passed
             with pytest.raises(etl.EtlBudgetExceeded) as exc_time:
-                list(etl.extract_batches(LIVE, {"sql": "SELECT 1"}, budget=budget_time))
+                list(etl.extract_batches(LIVE, spec, budget=budget_time))
             assert exc_time.value.error_code == "budget_seconds"
 
 
@@ -254,8 +255,9 @@ def test_cancellation_callback():
     with mock.patch("pyarrow.flight.FlightClient", return_value=FakeClient()):
         with mock.patch.object(limiter, "lease"):
             cancelled = True
+            spec = {"dataset": "t", "columns": ["id"]}
             with pytest.raises(etl.EtlCancelled):
-                list(etl.extract_batches(LIVE, {"sql": "SELECT 1"}, is_cancelled=lambda: cancelled))
+                list(etl.extract_batches(LIVE, spec, is_cancelled=lambda: cancelled))
 
 
 @live
@@ -319,3 +321,94 @@ def test_publish_generation_atomic(db, run_fixture):
     cr.execute("SELECT state, rows_read FROM job_run WHERE id = %s", (run_id,))
     st, rows = cr.fetchone()
     assert st == "succeeded" and rows == 3
+
+
+def test_publish_generation_schema_change_across_generations(db, run_fixture):
+    """DROP + CREATE VIEW allows publishing gen 2 with altered/retyped columns."""
+    c, cr = db
+    run_id = run_fixture["run_id"]
+    fence = run_fixture["fence"]
+    target_name = "test_schema_change_ds"
+    stg_tbl1 = etl.staging_table_name(run_id, 10)
+
+    # Generation 1: integer column 'val'
+    b1 = pa.record_batch([pa.array([10, 20])], names=["val"])
+    etl.stage_batch(cr, run_id, fence, stg_tbl1, b1)
+    gen1 = etl.publish_generation(cr, run_id, fence, spec={"target_name": target_name}, staging_table=stg_tbl1)
+    assert gen1 == 1
+
+    # Generation 2: run 2 on the same pipeline, but schema changed:
+    # 'val' is now text, and a new column 'extra' is added
+    cr.execute(
+        "INSERT INTO job_run(revision_id, workspace_id, idempotency_key, requested_by) VALUES (%s, %s, %s, %s) RETURNING id",
+        (run_fixture["revision_id"], run_fixture["workspace_id"], f"idem-g2-{uuid.uuid4().hex[:8]}", run_fixture["user_id"])
+    )
+    run2_id = cr.fetchone()[0]
+    cr.execute("SELECT claim_run(%s, 'worker-1', 60)", (run2_id,))
+    fence2 = cr.fetchone()[0]
+
+    stg_tbl2 = etl.staging_table_name(run2_id, 11)
+    b2 = pa.record_batch([
+        pa.array(["changed_to_text_1", "changed_to_text_2"]),
+        pa.array([999, 888])
+    ], names=["val", "extra"])
+    etl.stage_batch(cr, run2_id, fence2, stg_tbl2, b2)
+
+    # Publish generation 2: MUST succeed despite column retyping and new column!
+    gen2 = etl.publish_generation(cr, run2_id, fence2, spec={"target_name": target_name}, staging_table=stg_tbl2)
+    assert gen2 == 2
+
+    # Verify the view returns the new schema and new rows
+    cr.execute(f"SELECT val, extra FROM uetl_published.{target_name} ORDER BY extra")
+    rows = cr.fetchall()
+    assert rows == [("changed_to_text_2", 888), ("changed_to_text_1", 999)]
+
+
+def test_extract_batches_rejects_sql_injection_and_unallowed_datasets():
+    """Injection via quotes, semicolons, DML, or unallowed datasets is rejected before SPICE."""
+    # 1. Unallowed dataset
+    with pytest.raises(etl.EtlError) as exc_unallowed:
+        list(etl.extract_batches(LIVE, {
+            "dataset": "unallowed_table",
+            "allowed_datasets": ["allowed_mock"]
+        }))
+    assert "not on the allowlist" in str(exc_unallowed.value)
+
+    # 2. Injection via semicolon / second statement in sql
+    with pytest.raises(ValueError):
+        list(etl.extract_batches(LIVE, {
+            "dataset": "cycletime_mock",
+            "sql": 'SELECT * FROM "cycletime_mock"; DROP TABLE "t";'
+        }))
+
+    # 3. Injection via column name with quotes / DML
+    with pytest.raises(ValueError):
+        list(etl.extract_batches(LIVE, {
+            "dataset": "cycletime_mock",
+            "columns": ['col"; DROP TABLE t; --']
+        }))
+
+    # 4. Injection via UNION in sql
+    with pytest.raises(ValueError):
+        list(etl.extract_batches(LIVE, {
+            "dataset": "cycletime_mock",
+            "sql": 'SELECT * FROM "cycletime_mock" UNION SELECT * FROM "other"'
+        }))
+
+
+def test_limiter_heartbeat_renews_lease_past_ttl():
+    """Heartbeat renewal maintains the lease active past its initial TTL."""
+    # Initial TTL = 2s, heartbeat every 0.4s
+    with limiter.lease("spice", ttl_s=2, heartbeat_s=0.4) as lid:
+        # Sleep 3.0 seconds (well past the 2s initial TTL)
+        time.sleep(3.0)
+        # The lease must still exist in source_lease with expires_at > now
+        with limiter._transaction() as cur:
+            cur.execute("SELECT count(*) FROM source_lease WHERE id=%s AND expires_at > clock_timestamp()", (lid,))
+            assert cur.fetchone()[0] == 1, "Lease expired despite heartbeat"
+
+    # Once the context exits, the lease is released immediately
+    with limiter._transaction() as cur:
+        cur.execute("SELECT count(*) FROM source_lease WHERE id=%s", (lid,))
+        assert cur.fetchone()[0] == 0
+

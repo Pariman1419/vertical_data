@@ -97,8 +97,17 @@ def release(lease_id):
         cur.execute("delete from source_lease where id=%s", (lease_id,))
 
 
+def renew(lease_id, ttl_s: int = 30) -> bool:
+    if type(ttl_s) is not int or ttl_s < 1:
+        raise ValueError("TTL must be a positive integer")
+    with _transaction() as cur:
+        cur.execute("update source_lease set expires_at = clock_timestamp() + make_interval(secs => %s)"
+                    " where id=%s and expires_at > clock_timestamp()", (ttl_s, lease_id))
+        return cur.rowcount == 1
+
+
 @contextmanager
-def lease(pool: str, ttl_s: int = 30, on_wait=None):
+def lease(pool: str, ttl_s: int = 30, heartbeat_s: float | None = None, on_wait=None):
     started = time.monotonic()
     try:
         lid = acquire(pool, ttl_s)
@@ -108,9 +117,26 @@ def lease(pool: str, ttl_s: int = 30, on_wait=None):
                 on_wait(max(0, math.ceil((time.monotonic() - started) * 1000)))
             except Exception as error:
                 log.warning('Source wait observer unavailable (%s)', type(error).__name__)
+
+    stop_event = threading.Event()
+    thread = None
+    if heartbeat_s is not None and heartbeat_s > 0:
+        def _heartbeat():
+            while not stop_event.wait(heartbeat_s):
+                try:
+                    if not renew(lid, ttl_s):
+                        break
+                except Exception as ex:
+                    log.warning("Source lease renewal error: %s", ex)
+        thread = threading.Thread(target=_heartbeat, daemon=True, name="limiter-heartbeat")
+        thread.start()
+
     try:
         yield lid
     finally:
+        if thread is not None:
+            stop_event.set()
+            thread.join(timeout=1.0)
         try:
             release(lid)
         except (Busy, psycopg2.Error) as error:

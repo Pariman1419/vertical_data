@@ -8,6 +8,7 @@ import io
 import logging
 import re
 import socket
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator, List, Optional, Union
@@ -163,7 +164,9 @@ def ensure_staging_table(cur, run_id: Any, fence: int, table: str, schema: pa.Sc
 
 
 def extract_batches(conn: dict, spec: dict, *, budget: Optional[Union[Budget, dict]] = None,
-                    is_cancelled: Optional[Callable[[], bool]] = None) -> Iterator[pa.RecordBatch]:
+                    is_cancelled: Optional[Callable[[], bool]] = None,
+                    allow_synthetic: bool = False,
+                    heartbeat_s: float = 10.0) -> Iterator[pa.RecordBatch]:
     """Stream batches from SPICE over Flight, bounded by row, byte, and time budgets."""
     if budget is None:
         b = Budget()
@@ -175,18 +178,26 @@ def extract_batches(conn: dict, spec: dict, *, budget: Optional[Union[Budget, di
     if is_cancelled and is_cancelled():
         raise EtlCancelled("ETL run was cancelled before extract started")
 
-    # Validate dataset and allowlist
+    # Validate dataset and fail-closed server connection allowlist
     dataset = spec.get("dataset")
-    allowed_datasets = spec.get("allowed_datasets")
-    if allowed_datasets is not None:
-        if not dataset or dataset not in allowed_datasets:
-            raise EtlError(f"Dataset '{dataset}' is not on the allowlist")
+    sql_text = spec.get("sql")
+
+    is_synth = bool(sql_text and GEN_SERIES_RE.fullmatch(sql_text))
+    if is_synth:
+        if not allow_synthetic:
+            raise EtlError("Synthetic generator queries are forbidden in production")
+    else:
+        # Server-side connection allowlist (fail-closed)
+        allowed_objects = conn.get("allowed_objects") or conn.get("allowed_datasets")
+        if not allowed_objects:
+            raise EtlError("Connection has no allowed datasets on record (fail-closed)")
+        if not dataset or dataset not in allowed_objects:
+            raise EtlError(f"Dataset '{dataset}' is not on the server connection allowlist")
 
     # Build or extract query
-    sql_text = spec.get("sql")
     if sql_text:
         # Never pass raw SQL straight to Flight; route through assert_select_shape (or synthetic generator)
-        if not GEN_SERIES_RE.match(sql_text):
+        if not is_synth:
             if not dataset:
                 raise ValueError("spec['sql'] requires 'dataset' to validate SELECT shape")
             allowed_cols = set(spec.get("allowed_columns") or (spec.get("columns", {}).get("types", {}) if isinstance(spec.get("columns"), dict) else []))
@@ -219,8 +230,20 @@ def extract_batches(conn: dict, spec: dict, *, budget: Optional[Union[Budget, di
         sql_text = spice.build_select(dataset, cols_spec, filters, limit)
 
     # Lease acquisition via limiter with periodic heartbeat renewal (maintains lease up to 30 min)
+    lease_lost = threading.Event()
+    active_reader = None
+
+    def on_lease_lost():
+        lease_lost.set()
+        log.error("Source capacity lease renewal failed (lease expired or lost)")
+        if active_reader is not None:
+            try:
+                active_reader.cancel()
+            except Exception:
+                pass
+
     try:
-        with limiter.lease("spice", ttl_s=30, heartbeat_s=10.0):
+        with limiter.lease("spice", ttl_s=30, heartbeat_s=heartbeat_s, on_renew_failed=on_lease_lost):
             ip, port = spice.flight_endpoint(conn)
             deadline = time.monotonic() + b.max_seconds
             headers = [(b"authorization", ("Bearer " + t).encode())] if (t := spice._token(conn)) else []
@@ -237,7 +260,11 @@ def extract_batches(conn: dict, spec: dict, *, budget: Optional[Union[Budget, di
                     raise EtlBudgetExceeded("budget_seconds")
 
                 reader = client.do_get(info.endpoints[0].ticket, fl.FlightCallOptions(timeout=remaining, headers=headers))
+                active_reader = reader
                 for chunk in reader:
+                    if lease_lost.is_set():
+                        reader.cancel()
+                        raise EtlError("Source capacity lease renewal failed: lease was lost or expired")
                     if is_cancelled and is_cancelled():
                         reader.cancel()
                         raise EtlCancelled("ETL run cancelled during extract")
@@ -265,12 +292,16 @@ def extract_batches(conn: dict, spec: dict, *, budget: Optional[Union[Budget, di
                     yield batch
             except EtlError:
                 raise
-            except (fl.FlightTimedOutError, socket.timeout, TimeoutError):
-                raise spice.SpiceError("timeout") from None
-            except fl.FlightUnavailableError as e:
-                raise spice.SpiceError("unreachable", e) from None
-            except (fl.FlightError, pa.ArrowException, OSError) as e:
-                raise spice.SpiceError("rejected", e) from None
+            except Exception as e:
+                if lease_lost.is_set():
+                    raise EtlError("Source capacity lease renewal failed: lease was lost or expired") from e
+                if isinstance(e, (fl.FlightTimedOutError, socket.timeout, TimeoutError)):
+                    raise spice.SpiceError("timeout") from None
+                if isinstance(e, fl.FlightUnavailableError):
+                    raise spice.SpiceError("unreachable", e) from None
+                if isinstance(e, (fl.FlightError, pa.ArrowException, OSError)):
+                    raise spice.SpiceError("rejected", e) from None
+                raise
             finally:
                 client.close()
     except limiter.Busy:

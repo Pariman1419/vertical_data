@@ -135,3 +135,15 @@
   2. `extract_batches`: enforced dataset allowlist; routed queries through `spice.assert_select_shape` and `spice.build_select` with identifier validation. Tested: injection attempts via `"`, `;`, DML (`DROP`, `DELETE`), and unallowed datasets rejected before reaching SPICE.
   3. `limiter`: added `renew(lease_id, ttl_s)` and background heartbeat renewal to `limiter.lease(..., heartbeat_s=10.0)` ensuring active slots are held during long extractions up to 30 minutes. Tested: lease remains counted in DB past its initial TTL.
 - Verification: `tests/v2/test_etl_types.py` 10/10 passed in 9.93s; full v2 test suite 151 passed; UI suite 31 passed; legacy suite 39 passed. Zero scratch files or persistent DB mutations.
+
+## 2026-10-28 — Phase 3 Task 4 review fixes round 2 (implementer: agy)
+- Addressed owner review of commit `eb398aa`:
+  1. Server-side connection allowlist enforcement (fail-closed): `extract_batches` now strictly evaluates `conn["allowed_objects"]` from the server connection metadata rather than accepting client-side `spec["allowed_datasets"]`. If the connection has no allowlist or the dataset is not on it, extraction is rejected immediately.
+  2. `GEN_SERIES_RE`: restricted strictly to test mode via `allow_synthetic: bool = False` default; queries matching `GEN_SERIES_RE.fullmatch` in production are forbidden.
+  3. Lease renewal termination: wired `on_renew_failed` callback from `limiter.lease` into `extract_batches`; if `renew()` returns `False`, `extract_batches` cancels the reader and halts with a clear `EtlError`.
+- Added tests in `tests/v2/test_etl_types.py`:
+  - Fail-closed rejection when connection has no `allowed_objects` or empty allowlist.
+  - Rejection when `spec` attempts to supply its own `allowed_datasets`.
+  - Rejection when `GEN_SERIES_RE` is submitted with `allow_synthetic=False`.
+  - Immediate `EtlError` termination when `limiter.renew()` returns `False`.
+- Verification: `tests/v2/test_etl_types.py` 11/11 passed; full v2 suite 152 passed; UI suite 31 passed; legacy suite 39 passed. Item 4 (permissions) remains untouched awaiting owner decision.

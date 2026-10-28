@@ -107,7 +107,7 @@ def renew(lease_id, ttl_s: int = 30) -> bool:
 
 
 @contextmanager
-def lease(pool: str, ttl_s: int = 30, heartbeat_s: float | None = None, on_wait=None):
+def lease(pool: str, ttl_s: int = 30, heartbeat_s: float | None = None, on_wait=None, on_renew_failed=None):
     started = time.monotonic()
     try:
         lid = acquire(pool, ttl_s)
@@ -125,9 +125,20 @@ def lease(pool: str, ttl_s: int = 30, heartbeat_s: float | None = None, on_wait=
             while not stop_event.wait(heartbeat_s):
                 try:
                     if not renew(lid, ttl_s):
+                        if on_renew_failed is not None:
+                            try:
+                                on_renew_failed()
+                            except Exception as ex_cb:
+                                log.warning("Error in on_renew_failed callback: %s", ex_cb)
                         break
                 except Exception as ex:
                     log.warning("Source lease renewal error: %s", ex)
+                    if on_renew_failed is not None:
+                        try:
+                            on_renew_failed()
+                        except Exception as ex_cb:
+                            log.warning("Error in on_renew_failed callback: %s", ex_cb)
+                    break
         thread = threading.Thread(target=_heartbeat, daemon=True, name="limiter-heartbeat")
         thread.start()
 

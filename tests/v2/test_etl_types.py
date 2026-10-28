@@ -216,17 +216,18 @@ def test_budget_byte_and_time_enforcement():
             pass
 
     import unittest.mock as mock
+    conn = {**LIVE, "allowed_objects": ["t"]}
     with mock.patch("pyarrow.flight.FlightClient", return_value=FakeClient()):
         with mock.patch.object(limiter, "lease"):
             spec = {"dataset": "t", "columns": ["id"]}
             with pytest.raises(etl.EtlBudgetExceeded) as exc_byte:
-                list(etl.extract_batches(LIVE, spec, budget=etl.Budget(max_bytes=10)))
+                list(etl.extract_batches(conn, spec, budget=etl.Budget(max_bytes=10)))
             assert exc_byte.value.error_code == "budget_bytes"
 
             # Time budget
             budget_time = etl.Budget(max_seconds=0)  # deadline already passed
             with pytest.raises(etl.EtlBudgetExceeded) as exc_time:
-                list(etl.extract_batches(LIVE, spec, budget=budget_time))
+                list(etl.extract_batches(conn, spec, budget=budget_time))
             assert exc_time.value.error_code == "budget_seconds"
 
 
@@ -252,12 +253,13 @@ def test_cancellation_callback():
             pass
 
     import unittest.mock as mock
+    conn = {**LIVE, "allowed_objects": ["t"]}
     with mock.patch("pyarrow.flight.FlightClient", return_value=FakeClient()):
         with mock.patch.object(limiter, "lease"):
             cancelled = True
             spec = {"dataset": "t", "columns": ["id"]}
             with pytest.raises(etl.EtlCancelled):
-                list(etl.extract_batches(LIVE, spec, is_cancelled=lambda: cancelled))
+                list(etl.extract_batches(conn, spec, is_cancelled=lambda: cancelled))
 
 
 @live
@@ -266,7 +268,7 @@ def test_live_streaming_5m_rows_bounded_rss():
     proc = psutil.Process()
     rss_before = proc.memory_info().rss
 
-    # Stream with max_rows = 5,000,000 from a 5,500,000 row generator
+    # Stream with max_rows = 5,000,000 from a 5,500,000 row generator (allow_synthetic=True)
     spec = {"sql": "SELECT * FROM generate_series(1, 5500000)"}
     budget = etl.Budget(max_rows=5_000_000, max_bytes=2_147_483_648, max_seconds=60)
 
@@ -276,7 +278,7 @@ def test_live_streaming_5m_rows_bounded_rss():
     while True:
         try:
             with pytest.raises(etl.EtlBudgetExceeded) as exc_info:
-                for b in etl.extract_batches(LIVE, spec, budget=budget):
+                for b in etl.extract_batches(LIVE, spec, budget=budget, allow_synthetic=True):
                     rows_streamed += b.num_rows
             break
         except spice.SpiceError as ex:
@@ -365,35 +367,96 @@ def test_publish_generation_schema_change_across_generations(db, run_fixture):
 
 
 def test_extract_batches_rejects_sql_injection_and_unallowed_datasets():
-    """Injection via quotes, semicolons, DML, or unallowed datasets is rejected before SPICE."""
-    # 1. Unallowed dataset
-    with pytest.raises(etl.EtlError) as exc_unallowed:
-        list(etl.extract_batches(LIVE, {
-            "dataset": "unallowed_table",
-            "allowed_datasets": ["allowed_mock"]
-        }))
-    assert "not on the allowlist" in str(exc_unallowed.value)
+    """Fail-closed allowlist enforcement, synthetic query restriction, and injection rejection."""
+    conn_with_allowed = {**LIVE, "allowed_objects": ["allowed_mock", "cycletime_mock"]}
+    conn_empty_allowed = {**LIVE, "allowed_objects": []}
+    conn_no_allowed = {**LIVE}  # Missing allowed_objects entirely
 
-    # 2. Injection via semicolon / second statement in sql
+    # 1. Fail-closed: missing allowed_objects on server connection -> rejected
+    with pytest.raises(etl.EtlError) as exc_none:
+        list(etl.extract_batches(conn_no_allowed, {"dataset": "cycletime_mock"}))
+    assert "no allowed datasets on record" in str(exc_none.value)
+
+    # 2. Fail-closed: empty allowed_objects on server connection -> rejected
+    with pytest.raises(etl.EtlError) as exc_empty:
+        list(etl.extract_batches(conn_empty_allowed, {"dataset": "cycletime_mock"}))
+    assert "no allowed datasets on record" in str(exc_empty.value)
+
+    # 3. Dataset not in server connection allowed_objects -> rejected
+    with pytest.raises(etl.EtlError) as exc_unallowed:
+        list(etl.extract_batches(conn_with_allowed, {"dataset": "unallowed_table"}))
+    assert "not on the server connection allowlist" in str(exc_unallowed.value)
+
+    # 4. Spec tries to supply its own allowed_datasets to bypass connection allowlist -> rejected
+    with pytest.raises(etl.EtlError) as exc_bypass:
+        list(etl.extract_batches(conn_with_allowed, {
+            "dataset": "evil_table",
+            "allowed_datasets": ["evil_table"]  # must be ignored!
+        }))
+    assert "not on the server connection allowlist" in str(exc_bypass.value)
+
+    # 5. Injection via semicolon / second statement in sql
     with pytest.raises(ValueError):
-        list(etl.extract_batches(LIVE, {
+        list(etl.extract_batches(conn_with_allowed, {
             "dataset": "cycletime_mock",
             "sql": 'SELECT * FROM "cycletime_mock"; DROP TABLE "t";'
         }))
 
-    # 3. Injection via column name with quotes / DML
+    # 6. Injection via column name with quotes / DML
     with pytest.raises(ValueError):
-        list(etl.extract_batches(LIVE, {
+        list(etl.extract_batches(conn_with_allowed, {
             "dataset": "cycletime_mock",
             "columns": ['col"; DROP TABLE t; --']
         }))
 
-    # 4. Injection via UNION in sql
+    # 7. Injection via UNION in sql
     with pytest.raises(ValueError):
-        list(etl.extract_batches(LIVE, {
+        list(etl.extract_batches(conn_with_allowed, {
             "dataset": "cycletime_mock",
             "sql": 'SELECT * FROM "cycletime_mock" UNION SELECT * FROM "other"'
         }))
+
+    # 8. Synthetic generator query (generate_series) rejected when allow_synthetic=False (production default)
+    with pytest.raises(etl.EtlError) as exc_synth:
+        list(etl.extract_batches(conn_with_allowed, {
+            "sql": "SELECT * FROM generate_series(1, 100)"
+        }, allow_synthetic=False))
+    assert "forbidden in production" in str(exc_synth.value)
+
+
+def test_extract_batches_stops_when_lease_renewal_fails():
+    """If limiter.renew() returns False, extract_batches stops immediately with a clear error."""
+    batch = pa.record_batch([pa.array([1, 2, 3])], names=["id"])
+
+    class SlowReader:
+        cancelled = False
+        def __iter__(self):
+            yield type("Chunk", (), {"data": batch})()
+            time.sleep(0.3)
+            yield type("Chunk", (), {"data": batch})()
+        def cancel(self):
+            self.cancelled = True
+
+    reader = SlowReader()
+    class FakeClient:
+        def get_flight_info(self, *a, **kw):
+            return type("Info", (), {"endpoints": [type("EP", (), {"ticket": b"t"})()]})()
+        def do_get(self, *a, **kw):
+            return reader
+        def close(self):
+            pass
+
+    import unittest.mock as mock
+    conn = {**LIVE, "allowed_objects": ["t"]}
+    spec = {"dataset": "t", "columns": ["id"]}
+
+    with mock.patch("pyarrow.flight.FlightClient", return_value=FakeClient()):
+        # Mock limiter.renew to return False on the first renewal attempt
+        with mock.patch.object(limiter, "renew", return_value=False):
+            with pytest.raises(etl.EtlError) as exc_info:
+                # Fast heartbeat_s=0.05 triggers renewal failure almost immediately
+                list(etl.extract_batches(conn, spec, budget=etl.Budget(max_seconds=10), heartbeat_s=0.05))
+            assert "lease renewal failed" in str(exc_info.value).lower()
 
 
 def test_limiter_heartbeat_renews_lease_past_ttl():

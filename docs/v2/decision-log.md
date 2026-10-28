@@ -39,3 +39,14 @@ Gate 0 approved by owner on 2026-10-27 ("approve ตาม proposal"). Entries b
 - **Source DB users are not independently verified read-only** (verified only for Postgres `spice_vdl_ro`; Oracle/SQL Server unknown). Owner: access is controlled through SPICE; no DBA confirmation requested now. U-ETL itself sends only SELECT/DESCRIBE and cannot reach the DBs directly. Residual risk: anyone able to reach SPICE can send any SQL the DB user permits (SPICE write/DDL rejection is untested).
 - **Windows admin password on the SPICE host not rotated** (it appeared in chat). Accepted by owner for now.
 - Dataset onboarding design: U-ETL generates a spicepod entry that references existing source profiles (`*pg`, `*scada`); no DB credentials pass through U-ETL; a human applies it on the host (backup -> edit -> validate -> reload/restart -> Refresh catalog). Automatic writer on the SPICE host deferred until SPICE has authentication.
+
+## 2026-10-28 — Owner decisions for the Phase 3 start (grill-me round 1)
+| Decision | Choice | Notes |
+|---|---|---|
+| Order of work | Close the two small leftovers first, then Phase 3 | Leftovers: reject `\` in string filter values (server + UI validator, with tests); make live-SPICE tests tolerate a full lease pool |
+| Limiter behaviour when the SPICE slot is full | Wait up to **2 s**, then answer **429** with `Retry-After` | Plus a new **Source activity** page (queue waits, 429s, timeouts, reads per dataset/user), separate from the Audit trail; no raw SPICE text or secrets in it |
+| Who writes Phase 3 code | **Codex writes; Claude reviews and runs the suite independently** | One writer in the repo at a time; reviewer is read-only; commit only own files (no `git add -A`) |
+| Queue framework | **Dramatiq** (Redis = transport, PostgreSQL = lease authority) | Start with the planned 1-day crash/redelivery spike before locking the choice |
+| Redis / worker hosting (test phase) | **Docker Compose: api + worker + redis in one stack** | Replaces the WSL Redis (no autostart) for tests; WSL Redis stays only as a fallback |
+| ETL test data | **Synthetic data on SPICE (`generate_series`) + `_mock` tables only** | No real/SCADA tables in Phase 3 tests |
+| Publish mechanism | **Table per generation + a view pointing at the latest generation**, swapped in one transaction | Retention of old generations: N to be decided |
